@@ -1,0 +1,9 @@
+*~
+.~*#
+.nfs*
+*.[oa]
+*.tsv
+build/
+CMakeFiles/
+CMakeCache*
+
