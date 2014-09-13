@@ -15,7 +15,7 @@ library for OpenCL.
 
 * [GLib][]
 * [cf4ocl][]
-* [OpenCL][] ([ocl-impl][any implementation])
+* [OpenCL][] ([any implementation][oclimpl])
 
 ### Build tools
 
@@ -28,7 +28,7 @@ These examples are licensed under [GPLv3][].
 
 [GLib]: https://developer.gnome.org/glib/ "GLib"
 [OpenCL]: http://www.khronos.org/opencl/ "OpenCL"
-[ocl-impl]: https://github.com/FakenMC/cf4ocl/wiki/OpenCL-implementations
+[oclimpl]: https://github.com/FakenMC/cf4ocl/wiki/OpenCL-implementations "OpenCL implementations"
 [GPLv3]: http://www.gnu.org/licenses/gpl.html "GPLv3"
 [CMake]: http://www.cmake.org/
 [cf4ocl]: https://github.com/FakenMC/cf4ocl "cf4ocl"
