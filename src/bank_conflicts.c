@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
 	ccl_if_err_goto(err, error_handler);
 
 	/* Copy data from host to device. */
-	ccl_buffer_enqueue_write(cq, buf_data_dev, CL_TRUE, 0, size_data_in_bytes,
+	ccl_buffer_enqueue_write(buf_data_dev, cq, CL_TRUE, 0, size_data_in_bytes,
 		data_host, NULL, &err);
 	ccl_if_err_goto(err, error_handler);
 

@@ -360,14 +360,14 @@ int main(int argc, char *argv[]) {
 	ccl_prof_start(prof_dev);
 
 	/* Copy matrix A to device. */
-	ccl_buffer_enqueue_write(cq, matrixA_dev, CL_TRUE, 0, size_matA_in_bytes,
+	ccl_buffer_enqueue_write(matrixA_dev, cq, CL_TRUE, 0, size_matA_in_bytes,
 		matrixA_host, NULL, &err);
 	ccl_if_err_goto(err, error_handler);
 
 	/* Copy matrix B to device. */
 	if (!IS_AAT(kernel_id)) {
 		/* Only required if we're not multiplying the transpose. */
-		ccl_buffer_enqueue_write(cq, matrixB_dev, CL_TRUE, 0,
+		ccl_buffer_enqueue_write(matrixB_dev, cq, CL_TRUE, 0,
 			size_matB_in_bytes, matrixB_host, NULL, &err);
 		ccl_if_err_goto(err, error_handler);
 	}
@@ -468,7 +468,7 @@ int main(int argc, char *argv[]) {
 	/*  Get result from device */
 	/* *********************** */
 
-	ccl_buffer_enqueue_read(cq, matrixC_dev, CL_TRUE, 0, size_matC_in_bytes,
+	ccl_buffer_enqueue_read(matrixC_dev, cq, CL_TRUE, 0, size_matC_in_bytes,
 		matrixC_host, NULL, &err);
 	ccl_if_err_goto(err, error_handler);
 
