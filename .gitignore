@@ -3,7 +3,7 @@
 .nfs*
 *.[oa]
 *.tsv
-build/
+build*
 CMakeFiles/
 CMakeCache*
 

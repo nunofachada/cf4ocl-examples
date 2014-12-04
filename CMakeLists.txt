@@ -5,15 +5,17 @@ project(cf4ocl2-examples)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 # Set version
-set(${PROJECT_NAME}_VERSION_STRING "v2.0.0")
+set(${PROJECT_NAME}_VERSION_STRING "2.0.0")
 
 # Set log domain
 add_definitions(-DG_LOG_DOMAIN=\"${PROJECT_NAME}\")
 
-# Compiler options for GCC
+# Compiler options for GCC/Clang
 # -Wno-comment because of comment within comment in OpenCL headers
-if(CMAKE_COMPILER_IS_GNUCC)
-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wno-comment -std=c99")
+if((${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
+        OR (${CMAKE_C_COMPILER_ID} STREQUAL "GNU"))
+        # Clang and GCC flags
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wno-comment -std=c99")
 endif()
 
 # Find required libraries
