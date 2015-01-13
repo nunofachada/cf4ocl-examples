@@ -21,13 +21,13 @@ endif()
 # Find required libraries
 find_package(PkgConfig REQUIRED)
 find_package(OpenCL REQUIRED)
-find_package(cf4ocl2 REQUIRED)
-pkg_check_modules(GLIB REQUIRED glib-2.0>=2.32.1)
+pkg_check_modules(CF4OCL2 REQUIRED cf4ocl2>=2.0.0)
+pkg_check_modules(GLIB REQUIRED glib-2.0>=2.0.0)
 find_package(OpenMP QUIET)
 
 # Library include directories
-include_directories(${CF4OCL2_INCLUDE_DIRS} ${GLIB_INCLUDE_DIRS}
-	${OPENCL_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
+include_directories(${CF4OCL2_INCLUDE_DIRS} ${OPENCL_INCLUDE_DIRS}
+	${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
 
 # Add src folder
 add_subdirectory(src)

@@ -3,7 +3,7 @@ SET(EXAMPLES matmult bank_conflicts)
 
 # Add common examples library
 add_library(examples_common examples_common.c)
-target_link_libraries(examples_common ${CF4OCL2_LIBRARIES} m 
+target_link_libraries(examples_common ${CF4OCL2_LIBRARIES} m
 	${OPENCL_LIBRARIES} ${GLIB_LIBRARIES} ${GLIB_LDFLAGS})
 
 # Setup the configuration header
