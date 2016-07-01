@@ -62,6 +62,38 @@
 		return FALSE; \
 	}
 
+/**
+ * If error is detected in `err` object (`err != NULL`), go to the specified
+ * label.
+ *
+ * @param[in] err GError* object.
+ * @param[in] label Label to goto if error is detected.
+ * */
+#define if_err_goto(err, label)	\
+	if ((err) != NULL) { \
+		g_debug("Error in function %s at %s.", G_STRFUNC, G_STRLOC); \
+		goto label; \
+	}
+
+/**
+ * If error is detected (`error_code != no_error_code`),
+ * create an error object (GError) and go to the specified label.
+ *
+ * @param[out] err GError* object.
+ * @param[in] quark Quark indicating the error domain.
+ * @param[in] error_condition Must result to true in order to create error.
+ * @param[in] error_code Error code to set.
+ * @param[in] label Label to goto if error is detected.
+ * @param[in] msg Error message in case of error.
+ * @param[in] ... Extra parameters for error message.
+ * */
+#define if_err_create_goto( \
+	err, quark, error_condition, error_code, label, msg, ...) \
+	if (error_condition) { \
+		g_set_error(&(err), (quark), (error_code), (msg), ##__VA_ARGS__); \
+		g_debug("Error in function %s at %s.", G_STRFUNC, G_STRLOC); \
+		goto label; \
+	}
 
 /* Print device requirements for program. */
 void ccl_ex_reqs_print(size_t* gws, size_t* lws, size_t gmem, size_t lmem);

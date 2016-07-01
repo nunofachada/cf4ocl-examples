@@ -3,8 +3,7 @@ SET(EXAMPLES matmult bank_conflicts)
 
 # Add common examples library
 add_library(examples_common examples_common.c)
-target_link_libraries(examples_common ${CF4OCL2_LDFLAGS} m
-	${OPENCL_LIBRARIES} ${GLIB_LDFLAGS})
+target_link_libraries(examples_common ${CF4OCL2_LIBRARIES} m ${GLIB_LIBRARIES})
 
 # Setup the configuration header
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/examples_common.in.h
@@ -13,7 +12,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/examples_common.in.h
 # Add a target for each example
 foreach(EXAMPLE ${EXAMPLES})
 	add_executable(${EXAMPLE} ${EXAMPLE}.c)
-	target_link_libraries(${EXAMPLE} examples_common ${${EXAMPLE}_EXTRALIBS})
+	target_link_libraries(${EXAMPLE} examples_common)
 	# Copy the OpenCL kernel to the same location as the example executable
 	add_custom_command(TARGET ${EXAMPLE} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
