@@ -1,5 +1,5 @@
 # List of examples
-SET(EXAMPLES matmult bank_conflicts)
+SET(EXAMPLES matmult bank_conflicts ca_mt)
 
 # Add common examples library
 add_library(examples_common examples_common.c)
@@ -8,6 +8,18 @@ target_link_libraries(examples_common ${CF4OCL2_LIBRARIES} m ${GLIB_LIBRARIES})
 # Setup the configuration header
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/examples_common.in.h
 	${CMAKE_BINARY_DIR}/examples_common.h @ONLY)
+
+# Download header required for ca_mt
+if (NOT EXISTS "stb_image_write.h")
+	file(DOWNLOAD
+		"https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h"
+		"${CMAKE_BINARY_DIR}/stb_image_write.h")
+endif()
+
+# Is required header present?
+if (NOT EXISTS "${CMAKE_BINARY_DIR}/stb_image_write.h")
+	message(FATAL_ERROR "Unable to download stb_image_write.h")
+endif()
 
 # Add a target for each example
 foreach(EXAMPLE ${EXAMPLES})

@@ -27,7 +27,7 @@
  * has 16 or 32 banks of local memory.
  *
  * @author Nuno Fachada
- * @date 2014
+ * @date 2016
  * @copyright [GNU General Public License version 3 (GPLv3)](http://www.gnu.org/licenses/gpl.html)
  */
 
@@ -96,7 +96,7 @@ static GOptionEntry entries[] = {
 };
 
 /* Kernel file. */
-static char* kernel_files[] = {"bank_conflicts.cl"};
+static char* kernel_files[] = { "bank_conflicts.cl" };
 
 /**
  * Bank conflicts example main function.
@@ -229,7 +229,8 @@ int main(int argc, char *argv[]) {
 	/*  Set kernel arguments and run kernel */
 	/* ************************************ */
 
-	ccl_program_enqueue_kernel(prg, "bankconf", cq, 2, NULL, gws, lws, NULL, &err,
+	ccl_program_enqueue_kernel(
+		prg, "bankconf", cq, 2, NULL, gws, lws, NULL, &err,
 		buf_data_dev, ccl_arg_local(lws[1] * lws[0], cl_int),
 		ccl_arg_priv(stride, cl_uint), NULL);
 	if_err_goto(err, error_handler);

@@ -31,11 +31,17 @@
  * 2. RNG seed
  *
  * @author Nuno Fachada
- * @date 2014
+ * @date 2016
  * @copyright [GNU General Public License version 3 (GPLv3)](http://www.gnu.org/licenses/gpl.html)
  */
 
-#include "ca.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <cf4ocl2.h>
+#include "examples_common.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 #define IMAGE_FILE_PREFIX "out"
 #define IMAGE_FILE_NUM_DIGITS 5
@@ -73,6 +79,9 @@ static GAsyncQueue* host_thread_queue;
 /* OpenCL queues. */
 static CCLQueue* queue_exec;
 static CCLQueue* queue_comm;
+
+/* Kernel file. */
+static char* kernel_files[] = { "ca_mt.cl" };
 
 /* Communications function thread. */
 static gpointer comm_func(gpointer data) {
@@ -194,6 +203,8 @@ int main(int argc, char* argv[]) {
 	cl_image_format image_format = { CL_RGBA, CL_UNSIGNED_INT8 };
 	/* Thread data. */
 	struct thread_data td;
+	/* Full kernel path. */
+	gchar* kernel_path = NULL;
 
 	/* Global and local worksizes. */
 	size_t gws[2];
@@ -271,8 +282,12 @@ int main(int argc, char* argv[]) {
 		NULL);
 	HANDLE_ERROR(err);
 
+	/* Get location of kernel file, which should be in the same location
+	 * of the bankconf executable. */
+	kernel_path = ccl_ex_kernelpath_get(kernel_files[0], argv[0]);
+
 	/* Create program from kernel source and compile it. */
-	prg = ccl_program_new_from_source(ctx, CA_KERNEL, &err);
+	prg = ccl_program_new_from_source_file(ctx, kernel_path, &err);
 	HANDLE_ERROR(err);
 
 	ccl_program_build(prg, NULL, &err);

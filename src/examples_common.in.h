@@ -21,7 +21,7 @@
  * Common includes and definitions for cf4ocl-examples.
  *
  * @author Nuno Fachada
- * @date 2014
+ * @date 2016
  * @copyright [GNU General Public License version 3 (GPLv3)](http://www.gnu.org/licenses/gpl.html)
  * */
 
@@ -94,6 +94,13 @@
 		g_debug("Error in function %s at %s.", G_STRFUNC, G_STRLOC); \
 		goto label; \
 	}
+
+/* Error handling macros. */
+#define ERROR_MSG_AND_EXIT(msg) \
+	do { fprintf(stderr, "\n%s\n", msg); exit(EXIT_FAILURE); } while(0)
+
+#define HANDLE_ERROR(err) \
+	if (err != NULL) { ERROR_MSG_AND_EXIT(err->message); }
 
 /* Print device requirements for program. */
 void ccl_ex_reqs_print(size_t* gws, size_t* lws, size_t gmem, size_t lmem);
