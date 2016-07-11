@@ -7,13 +7,13 @@ library for OpenCL.
 
 | Example      | Specific dependencies | Description                                                 |
 | ------------ | --------------------- | ----------------------------------------------------------- |
-| matmult      | [OpenMP][]            | Comparison of matrix multiplication with OpenCL and OpenMP  |
-| bankconf     | None                  | Example of GPU bank conflicts                               |
-
+| matmult      | [OpenMP][], [GLib][]  | Comparison of matrix multiplication with OpenCL and OpenMP  |
+| bankconf     | [GLib][]              | Example of GPU bank conflicts                               |
+| ca_mt        | [GLib][]              | Game of Life, multithreaded                                 |
+| prng         | pthread               | Massive pseudo-random number generator, multithreaded       |
 
 ### Global dependencies
 
-* [GLib][]
 * [cf4ocl][]
 * [OpenCL][] ([any implementation][oclimpl])
 
