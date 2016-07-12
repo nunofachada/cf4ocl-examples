@@ -473,11 +473,11 @@ int main(int argc, char **argv) {
 	/* Show basic profiling info. */
 	fprintf(stderr, " * Total elapsed time                : %es\n", dt);
 	fprintf(stderr, " * Total time in 'init' kernel       : %es\n",
-		(double) tkinit);
+		(double) (tkinit * 1e-9));
 	fprintf(stderr, " * Total time in 'rng' kernel        : %es\n",
-		(double) tkrng);
+		(double) (tkrng * 1e-9));
 	fprintf(stderr, " * Total time fetching data from GPU : %es\n",
-		(double) tcomms);
+		(double) (tcomms * 1e-9));
 	fprintf(stderr, "\n");
 
 	/* Destroy OpenCL objects. */

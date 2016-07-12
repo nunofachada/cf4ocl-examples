@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
 	char* dev_name;
 
 	/* Real and kernel work sizes. */
-	size_t rws, gws1, gws2, lws1, lws2;
+	size_t rws = 0, gws1 = 0, gws2 = 0, lws1 = 0, lws2 = 0;
 
 	/* Number of iterations producing random numbers. */
 	unsigned int numiter;
