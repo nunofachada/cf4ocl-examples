@@ -305,13 +305,14 @@ int main(int argc, char **argv) {
 	if (bufs.bufdev) ccl_buffer_destroy(bufs.bufdev);
 	if (cq_main) ccl_queue_destroy(cq_main);
 	if (bufs.cq) ccl_queue_destroy(bufs.cq);
-	if (kinit) ccl_kernel_destroy(kinit);
-	if (krng) ccl_kernel_destroy(krng);
 	if (prg) ccl_program_destroy(prg);
 	if (ctx) ccl_context_destroy(ctx);
 
 	/* Free host resources */
 	if (bufs.bufhost) free(bufs.bufhost);
+
+	/* Check that all cf4ocl wrapper objects are destroyed. */
+	assert(ccl_wrapper_memcheck());
 
 	/* Bye. */
 	return EXIT_SUCCESS;

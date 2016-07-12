@@ -488,10 +488,14 @@ int main(int argc, char **argv) {
 	if (bufs.bufdev) clReleaseMemObject(bufs.bufdev);
 	if (cq_main) clReleaseCommandQueue(cq_main);
 	if (bufs.cq) clReleaseCommandQueue(bufs.cq);
-	if (kernels[0]) clReleaseKernel(kernels[0]);
-	if (kernels[1]) clReleaseKernel(kernels[1]);
 	if (prg) clReleaseProgram(prg);
 	if (ctx) clReleaseContext(ctx);
+
+	/* Free kernel objects and kernel sources. */
+	for (i = 0; i < 2; i++) {
+		if (ksources[i]) free(ksources[i]);
+		if (kernels[i]) clReleaseKernel(kernels[i]);
+	}
 
 	/* Free platforms buffer. */
 	if (platfs) free(platfs);
@@ -501,10 +505,6 @@ int main(int argc, char **argv) {
 
 	/* Free host resources */
 	if (bufs.bufhost) free(bufs.bufhost);
-
-	/* Free kernel sources. */
-	if (ksources[0]) free(ksources[0]);
-	if (ksources[1]) free(ksources[1]);
 
 	/* Free device name. */
 	free(dev_name);
