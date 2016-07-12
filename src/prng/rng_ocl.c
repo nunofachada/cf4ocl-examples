@@ -310,17 +310,20 @@ int main(int argc, char **argv) {
 	status = clCreateKernelsInProgram(prg, 2, kernels, NULL);
 	HANDLE_ERROR(status);
 
-	/* Determine work sizes for each kernel. This is the minimum LOC approach
-	 * which works with all OpenCL versions. It might not provide the optimum
-	 * local work size, and does not account for the number of possibilities
-	 * considered by the ccl_kernel_suggest_worksizes() cf4ocl function. */
-	status = clGetKernelWorkGroupInfo(kernels[0], dev,
-		CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &lws1, NULL);
+	/* Determine work sizes for each kernel. This is a minimum LOC approach
+	 * which requires OpenCL >= 1.1. It does not account for the number of
+	 * possibilities considered by the ccl_kernel_suggest_worksizes() cf4ocl
+	 * function, namely multiple dimensions, OpenCL 1.0, kernel information
+	 * unavailable, etc. */
+	status = clGetKernelWorkGroupInfo(
+		kernels[0], dev, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE,
+		sizeof(size_t), &lws1, NULL);
 	HANDLE_ERROR(status);
 	gws1 = ((rws / lws1) + (((rws % lws1) > 0) ? 1 : 0)) * lws1;
 
-	status = clGetKernelWorkGroupInfo(kernels[1], dev,
-		CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &lws2, NULL);
+	status = clGetKernelWorkGroupInfo(
+		kernels[1], dev, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE,
+		sizeof(size_t), &lws2, NULL);
 	HANDLE_ERROR(status);
 	gws2 = ((rws / lws2) + (((rws % lws2) > 0) ? 1 : 0)) * lws2;
 
