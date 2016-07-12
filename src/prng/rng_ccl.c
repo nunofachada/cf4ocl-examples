@@ -124,11 +124,17 @@ int main(int argc, char **argv) {
 	/* Error management object. */
 	CCLErr *err = NULL;
 
+	/* Device name. */
+	char* dev_name;
+
 	/* Real and kernel work sizes. */
 	size_t rws, gws1, gws2, lws1, lws2;
 
 	/* Number of iterations producing random numbers. */
 	unsigned int numiter;
+
+	/* Program build log. */
+	const char * bldlog;
 
 	/* Did user specify a number of random numbers? */
 	if (argc >= 2) {
@@ -154,10 +160,13 @@ int main(int argc, char **argv) {
 	/* Setup OpenCL context with GPU device. */
 	ctx = ccl_context_new_gpu(&err);
 	HANDLE_ERROR(err);
-	// TODO: Check that a device was found
 
 	/* Get device. */
 	dev = ccl_context_get_device(ctx, 0, &err);
+	HANDLE_ERROR(err);
+
+	/* Get device name. */
+	dev_name = ccl_device_get_info_array(dev, CL_DEVICE_NAME, char*, &err);
 	HANDLE_ERROR(err);
 
 	/* Create command queues. */
@@ -172,8 +181,13 @@ int main(int argc, char **argv) {
 
 	/* Build program. */
 	ccl_program_build(prg, NULL, &err);
+
+	/* Print build log in case of error. */
 	if ((err) && (err->code == CL_BUILD_PROGRAM_FAILURE)) {
-		fprintf(stderr, "%s", ccl_program_get_build_log(prg, NULL));
+		bldlog = ccl_program_get_build_log(prg, &err);
+		HANDLE_ERROR(err);
+		fprintf(stderr, "Error building program: \n%s", bldlog);
+		exit(EXIT_FAILURE);
 	}
 	HANDLE_ERROR(err);
 
@@ -184,11 +198,9 @@ int main(int argc, char **argv) {
 	HANDLE_ERROR(err);
 
 	/* Determine preferred work sizes for each kernel. */
-	ccl_kernel_suggest_worksizes(
-		kinit, dev, 1, &rws, &gws1, &lws1, &err);
+	ccl_kernel_suggest_worksizes(kinit, dev, 1, &rws, &gws1, &lws1, &err);
 	HANDLE_ERROR(err);
-	ccl_kernel_suggest_worksizes(
-		krng, dev, 1, &rws, &gws2, &lws2, &err);
+	ccl_kernel_suggest_worksizes(krng, dev, 1, &rws, &gws2, &lws2, &err);
 	HANDLE_ERROR(err);
 
 	/* Allocate memory for host buffer. */
@@ -203,7 +215,8 @@ int main(int argc, char **argv) {
 	HANDLE_ERROR(err);
 
 	/* Print information. */
-	// TODO Print device name
+	fprintf(stderr, "\n");
+	fprintf(stderr, " * Device name                   : %s\n", dev_name);
 	fprintf(stderr, " * Global/local work sizes (init): %u/%u\n",
 		(unsigned int) gws1, (unsigned int) lws1);
 	fprintf(stderr, " * Global/local work sizes (rng) : %u/%u\n",
@@ -216,11 +229,12 @@ int main(int argc, char **argv) {
 	ccl_prof_start(prof);
 
 	/* Invoke kernel for initializing random numbers. */
-	ccl_kernel_set_args_and_enqueue_ndrange(kinit, cq_main, 1, NULL,
+	evt_exec = ccl_kernel_set_args_and_enqueue_ndrange(kinit, cq_main, 1, NULL,
 		(const size_t*) &gws1, (const size_t*) &lws1, NULL, &err,
 		bufs.bufdev, ccl_arg_priv(bufs.numrn, cl_uint), /* Kernel arguments. */
 		NULL);
 	HANDLE_ERROR(err);
+	ccl_event_set_name(evt_exec, "INIT_KERNEL");
 
 	/* Set fixed argument of RNG kernel (number of random numbers in buffer). */
 	ccl_kernel_set_arg(krng, 0, ccl_arg_priv(bufs.numrn, cl_uint));
@@ -232,7 +246,7 @@ int main(int argc, char **argv) {
 	/* Produce random numbers. */
 	for (unsigned int i = 0; i < numiter; i++) {
 
-		/* Read data from device buffer into host buffer (blocking call). */
+		/* Read data from device buffer into host buffer (non-blocking call). */
 		evt_comms = ccl_buffer_enqueue_read(bufs.bufdev, bufs.cq, CL_FALSE, 0,
 			bufs.bufsize, bufs.bufhost, NULL, &err);
 		HANDLE_ERROR(err);
@@ -248,6 +262,7 @@ int main(int argc, char **argv) {
 			ccl_arg_skip, bufs.bufdev, buf_main, /* Kernel arguments. */
 			NULL);
 		HANDLE_ERROR(err);
+		ccl_event_set_name(evt_exec, "RNG_KERNEL");
 
 		/* Wait for transfer and for RNG kernel. */
 		ccl_event_wait(ccl_ewl(&ewl, evt_comms, evt_exec, NULL), &err);
@@ -302,4 +317,3 @@ int main(int argc, char **argv) {
 	return EXIT_SUCCESS;
 
 }
-
