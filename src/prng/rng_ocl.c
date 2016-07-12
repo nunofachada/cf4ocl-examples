@@ -31,6 +31,8 @@
 #endif
 #include <pthread.h>
 #include <assert.h>
+#include <sys/time.h>
+#include <stdio.h>
 
 /* Number of random number in buffer at each time.*/
 #define NUMRN_DEFAULT 16777216
@@ -57,10 +59,10 @@ struct bufshare {
 	cl_ulong * bufhost;
 
 	/* Device buffer. */
-	cl_mem * bufdev;
+	cl_mem bufdev;
 
 	/* Command queue for data transfers. */
-	cl_command_queue * cq;
+	cl_command_queue cq;
 
 	/* Possible transfer error. */
 	cl_int status;
@@ -80,7 +82,7 @@ void * rng_out(void * arg) {
 	struct bufshare * bufs = (struct bufshare *) arg;
 
 	/* Wait on transfer. */
-	bufs->status = clFinish(buds->cq);
+	bufs->status = clFinish(bufs->cq);
 
 	/* If error occurs let main thread handle it. */
 	if (bufs->status != CL_SUCCESS) return NULL;
@@ -102,8 +104,11 @@ void * rng_out(void * arg) {
  * */
 int main(int argc, char **argv) {
 
+	/* Aux. variable for loops. */
+	unsigned int i;
+
 	/* Host buffer. */
-	struct bufshare bufs = { NULL, NULL, NULL, NULL, 0, 0 };
+	struct bufshare bufs = { NULL, NULL, NULL, 0, 0, 0 };
 
 	/* Communications thread. */
 	pthread_t comms_th;
@@ -115,29 +120,54 @@ int main(int argc, char **argv) {
 	cl_context ctx = NULL;
 	cl_device_id dev = NULL;
 	cl_program prg = NULL;
-	cl_kernel kinit = NULL, krng = NULL;
+	cl_kernel kernels[2] = { NULL, NULL };
 	cl_command_queue cq_main = NULL;
 	cl_mem buf_main = NULL, bufswp = NULL;
-	cl_event evt_exec = NULL, evt_comms = NULL;
-	cl_platform_id *platfs = NULL;
+	cl_event evt_kinit = NULL;
+	cl_event * evts = NULL;
+	cl_platform_id * platfs = NULL;
+
+	/* Context properties. */
+	cl_context_properties ctx_prop[3] = { CL_CONTEXT_PLATFORM, 0, 0 };
 
  	/* Number of platforms. */
- 	cl_uint nplats;
+ 	cl_uint nplatfs;
 
  	/* Number of devices in platform. */
  	cl_uint ndevs;
 
-	/* Event wait list. */
-	cl_event ewl[2];
+	/* Device name. */
+	char* dev_name;
 
 	/* Status flag. */
 	cl_int status;
+
+	/* Size of information returned by clGet*Info functions. */
+	size_t infosize;
+
+	/* Generic vector where to put information returned by clGet*Info
+	 * functions. */
+	void * info = NULL;
 
 	/* Real and kernel work sizes. */
 	size_t rws, gws1, gws2, lws1, lws2;
 
 	/* Number of iterations producing random numbers. */
 	unsigned int numiter;
+
+	/* File pointer for files containing kernels. */
+	FILE * fp;
+
+	/* Length of kernel source code. */
+	size_t klens[2];
+
+	/* Kernel sources. */
+	char * ksources[2] = { NULL, NULL };
+
+	/* Variables for measuring execution time. */
+	struct timeval time1, time0;
+	double dt = 0;
+	cl_ulong tstart, tend, tkinit = 0, tcomms = 0, tkrng = 0;
 
 	/* Did user specify a number of random numbers? */
 	if (argc >= 2) {
@@ -172,11 +202,12 @@ int main(int argc, char **argv) {
 	HANDLE_ERROR(status);
 
 	/* Cycle through platforms until a GPU device is found. */
-	for (unsigned int i = 0; i < nplatfs; i++) {
+	for (i = 0; i < nplatfs; i++) {
 
 		/* Determine number of GPU devices in current platform. */
 		status = clGetDeviceIDs(platfs[i], CL_DEVICE_TYPE_GPU, 0, NULL, &ndevs);
-		HANDLE_ERROR(status);
+		if (status == CL_DEVICE_NOT_FOUND) continue;
+		else HANDLE_ERROR(status);
 
 		/* Was any GPU device found in current platform? */
 		if (ndevs > 0) {
@@ -185,63 +216,132 @@ int main(int argc, char **argv) {
 			status = clGetDeviceIDs(
 				platfs[i], CL_DEVICE_TYPE_GPU, 1, &dev, NULL);
 			HANDLE_ERROR(status);
+
+			/* Set the current platform as a context property. */
+			ctx_prop[1] = (cl_context_properties) platfs[i];
+
+			/* No need to cycle any more platforms. */
+			break;
 		}
 	}
 
 	/* If no GPU device was found, give up. */
 	assert(dev != NULL);
 
+	/* Get device name. */
+	status = clGetDeviceInfo(dev, CL_DEVICE_NAME, 0, NULL, &infosize);
+	HANDLE_ERROR(status);
+	dev_name = (char *) malloc(infosize);
+	status = clGetDeviceInfo(
+		dev, CL_DEVICE_NAME, infosize, (void *) dev_name, NULL);
+	HANDLE_ERROR(status);
+
 	/* Create context. */
-	ctx = ccl_context_new_gpu(&err);
-	HANDLE_ERROR(err);
+	ctx = clCreateContext(ctx_prop, 1, &dev, NULL, NULL, &status);
+	HANDLE_ERROR(status);
 
-	/* Get device. */
-	dev = ccl_context_get_device(ctx, 0, &err);
-	HANDLE_ERROR(err);
+	/* Create command queues. Here we use the "old" queue constructor, which is
+	 * deprecated in OpenCL >= 2.0, and may throw a warning if compiled against
+	 * such OpenCL versions. In cf4ocl the appropriate constructor is invoked
+	 * depending on the underlying platform and the OpenCL version cf4ocl was
+	 * built against. */
+	cq_main = clCreateCommandQueue(
+		ctx, dev, CL_QUEUE_PROFILING_ENABLE, &status);
+	HANDLE_ERROR(status);
 
-	/* Create command queues. */
-	cq_main = ccl_queue_new(ctx, dev, CL_QUEUE_PROFILING_ENABLE, &err);
-	HANDLE_ERROR(err);
-	bufs.cq = ccl_queue_new(ctx, dev, CL_QUEUE_PROFILING_ENABLE, &err);
-	HANDLE_ERROR(err);
+	bufs.cq = clCreateCommandQueue(
+		ctx, dev, CL_QUEUE_PROFILING_ENABLE, &status);
+	HANDLE_ERROR(status);
+
+	/* Read kernel sources into strings. */
+	for (i = 0; i < 2; i++) {
+
+		fp = fopen (kernel_filenames[i], "rb");
+		assert(fp != NULL);
+		fseek (fp, 0, SEEK_END);
+		klens[i] = (size_t) ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+		ksources[i] = malloc(klens[i]);
+		fread(ksources[i], 1, klens[i], fp);
+		fclose (fp);
+	}
 
 	/* Create program. */
-	prg = ccl_program_new_from_source_files(ctx, 2, kernel_filenames, &err);
-	HANDLE_ERROR(err);
+	prg = clCreateProgramWithSource(ctx, 2, (const char **) ksources,
+		(const size_t *) klens, &status);
+	HANDLE_ERROR(status);
 
 	/* Build program. */
-	ccl_program_build(prg, NULL, &err);
-	if ((err) && (err->code == CL_BUILD_PROGRAM_FAILURE)) {
-		fprintf(stderr, "%s", ccl_program_get_build_log(prg, NULL));
+	status = clBuildProgram(
+		prg, 1, (const cl_device_id *) &dev, NULL, NULL, NULL);
+
+	/* Print build log in case of error. */
+	if (status == CL_BUILD_PROGRAM_FAILURE) {
+
+		/* Get size of build log. */
+		status = clGetProgramBuildInfo(
+			prg, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &infosize);
+		HANDLE_ERROR(status);
+
+		/* Allocate space for build log. */
+		info = malloc(infosize);
+
+		/* Get build log. */
+		status = clGetProgramBuildInfo(
+			prg, dev, CL_PROGRAM_BUILD_LOG, infosize, info, NULL);
+		HANDLE_ERROR(status);
+
+		/* Show build log. */
+		fprintf(stderr, "Error building program: \n%s", (char *) info);
+
+		/* Release build log. */
+		free(info);
+
+		/* Stop program. */
+		exit(EXIT_FAILURE);
+
+	} else {
+
+		HANDLE_ERROR(status);
+
 	}
-	HANDLE_ERROR(err);
 
 	/* Get kernels. */
-	kinit = ccl_program_get_kernel(prg, KERNEL_INIT, &err);
-	HANDLE_ERROR(err);
-	krng = ccl_program_get_kernel(prg, KERNEL_RNG, &err);
-	HANDLE_ERROR(err);
+	status = clCreateKernelsInProgram(prg, 2, kernels, NULL);
+	HANDLE_ERROR(status);
 
-	/* Determine preferred work sizes for each kernel. */
-	ccl_kernel_suggest_worksizes(
-		kinit, dev, 1, &rws, &gws1, &lws1, &err);
-	HANDLE_ERROR(err);
-	ccl_kernel_suggest_worksizes(
-		krng, dev, 1, &rws, &gws2, &lws2, &err);
-	HANDLE_ERROR(err);
+	/* Determine work sizes for each kernel. This is the minimum LOC approach
+	 * which works with all OpenCL versions. It might not provide the optimum
+	 * local work size, and does not account for the number of possibilities
+	 * considered by the ccl_kernel_suggest_worksizes() cf4ocl function. */
+	status = clGetKernelWorkGroupInfo(kernels[0], dev,
+		CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &lws1, NULL);
+	HANDLE_ERROR(status);
+	gws1 = ((rws / lws1) + (((rws % lws1) > 0) ? 1 : 0)) * lws1;
+
+	status = clGetKernelWorkGroupInfo(kernels[1], dev,
+		CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &lws2, NULL);
+	HANDLE_ERROR(status);
+	gws2 = ((rws / lws2) + (((rws % lws2) > 0) ? 1 : 0)) * lws2;
 
 	/* Allocate memory for host buffer. */
-	bufs.bufhost = (cl_ulong*) malloc(bufs.bufsize);
+	bufs.bufhost = (cl_ulong *) malloc(bufs.bufsize);
 
 	/* Create device buffers. */
-	buf_main = ccl_buffer_new(
-		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &err);
-	HANDLE_ERROR(err);
-	bufs.bufdev = ccl_buffer_new(
-		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &err);
-	HANDLE_ERROR(err);
+	buf_main = clCreateBuffer(
+		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &status);
+	HANDLE_ERROR(status);
+
+	bufs.bufdev = clCreateBuffer(
+		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &status);
+	HANDLE_ERROR(status);
+
+	/* Initialize events buffers. */
+	evts = (cl_event *) calloc(2 * numiter, sizeof(cl_event));
 
 	/* Print information. */
+	fprintf(stderr, "\n");
+	fprintf(stderr, " * Device name                   : %s\n", dev_name);
 	fprintf(stderr, " * Global/local work sizes (init): %u/%u\n",
 		(unsigned int) gws1, (unsigned int) lws1);
 	fprintf(stderr, " * Global/local work sizes (rng) : %u/%u\n",
@@ -249,52 +349,67 @@ int main(int argc, char **argv) {
 	fprintf(stderr, " * Number of iterations          : %u\n",
 		(unsigned int) numiter);
 
-	/* Initialize profiling. */
-	prof = ccl_prof_new();
-	ccl_prof_start(prof);
+	/* Start profiling. */
+	gettimeofday(&time0, NULL);
 
-	/* Invoke kernel for initializing random numbers. */
-	ccl_kernel_set_args_and_enqueue_ndrange(kinit, cq_main, 1, NULL,
-		(const size_t*) &gws1, (const size_t*) &lws1, NULL, &err,
-		bufs.bufdev, ccl_arg_priv(bufs.numrn, cl_uint), /* Kernel arguments. */
-		NULL);
-	HANDLE_ERROR(err);
+	/* Set arguments for initialization kernel. */
+	status = clSetKernelArg(
+		kernels[0], 0, sizeof(cl_mem), (const void *) &bufs.bufdev);
+	HANDLE_ERROR(status);
+	status = clSetKernelArg(
+		kernels[0], 1, sizeof(cl_uint), (const void *) &bufs.numrn);
+	HANDLE_ERROR(status);
+
+	/* Invoke initialization kernel. */
+	status = clEnqueueNDRangeKernel(cq_main, kernels[0], 1, NULL,
+		(const size_t *) &gws1, (const size_t *) &lws1, 0, NULL, &evt_kinit);
+	HANDLE_ERROR(status);
 
 	/* Set fixed argument of RNG kernel (number of random numbers in buffer). */
-	ccl_kernel_set_arg(krng, 0, ccl_arg_priv(bufs.numrn, cl_uint));
+	status = clSetKernelArg(
+		kernels[1], 0, sizeof(cl_uint), (const void *) &bufs.numrn);
+	HANDLE_ERROR(status);
 
 	/* Wait for initialization to finish. */
-	ccl_queue_finish(cq_main, &err);
-	HANDLE_ERROR(err);
+	status = clFinish(cq_main);
+	HANDLE_ERROR(status);
 
 	/* Produce random numbers. */
-	for (unsigned int i = 0; i < numiter; i++) {
+	for (i = 0; i < numiter; i++) {
 
-		/* Read data from device buffer into host buffer (blocking call). */
-		evt_comms = ccl_buffer_enqueue_read(bufs.bufdev, bufs.cq, CL_FALSE, 0,
-			bufs.bufsize, bufs.bufhost, NULL, &err);
-		HANDLE_ERROR(err);
+		/* Read data from device buffer into host buffer (non-blocking call). */
+		status = clEnqueueReadBuffer(bufs.cq, bufs.bufdev, CL_FALSE, 0,
+			bufs.bufsize, bufs.bufhost, 0, NULL, &evts[i * 2]);
+		HANDLE_ERROR(status);
 
 		/* Invoke thread to output random numbers to stdout
 		 * (in raw, binary form). */
 		sth = pthread_create(&comms_th, NULL, rng_out, &bufs);
 		assert(sth == 0);
 
-		/* Run random number generation kernel. */
-		evt_exec = ccl_kernel_set_args_and_enqueue_ndrange(krng, cq_main, 1,
-			NULL, (const size_t*) &gws2, (const size_t*) &lws2, NULL, &err,
-			ccl_arg_skip, bufs.bufdev, buf_main, /* Kernel arguments. */
-			NULL);
-		HANDLE_ERROR(err);
+		/* Set RNG kernel arguments. */
+		status = clSetKernelArg(
+			kernels[1], 1, sizeof(cl_mem), (const void *) &bufs.bufdev);
+		HANDLE_ERROR(status);
+
+		status = clSetKernelArg(
+			kernels[1], 2, sizeof(cl_mem), (const void *) &buf_main);
+		HANDLE_ERROR(status);
+
+		/* Run RNG kernel. */
+		status = clEnqueueNDRangeKernel(cq_main, kernels[1], 1, NULL,
+			(const size_t *) &gws2, (const size_t *) &lws2, 0, NULL,
+			&evts[i * 2 + 1]);
+		HANDLE_ERROR(status);
 
 		/* Wait for transfer and for RNG kernel. */
-		ccl_event_wait(ccl_ewl(&ewl, evt_comms, evt_exec, NULL), &err);
-		HANDLE_ERROR(err);
+		status = clWaitForEvents(2, (const cl_event *) &evts[i * 2]);
+		HANDLE_ERROR(status);
 
 		/* Wait for output thread to finish. */
 		sth = pthread_join(comms_th, NULL);
 		assert(sth == 0);
-		HANDLE_ERROR(bufs.err);
+		HANDLE_ERROR(bufs.status);
 
 		/* Swap buffers. */
 		bufswp = buf_main;
@@ -304,41 +419,92 @@ int main(int argc, char **argv) {
 	}
 
 	/* Wait for all operations to finish. */
-	ccl_queue_finish(cq_main, &err);
-	HANDLE_ERROR(err);
+	status = clFinish(cq_main);
+	HANDLE_ERROR(status);
 
-	/* Perform profiling. */
-	ccl_prof_stop(prof);
-	ccl_prof_add_queue(prof, "Main", cq_main);
-	ccl_prof_add_queue(prof, "Comms", bufs.cq);
-	ccl_prof_calc(prof, &err);
-	HANDLE_ERROR(err);
+	/* Stop profiling. */
+	gettimeofday(&time1, NULL);
 
-	/* Show profiling info. */
-	fprintf(stderr, "%s",
-		ccl_prof_get_summary(prof,
-			CCL_PROF_AGG_SORT_TIME, CCL_PROF_OVERLAP_SORT_DURATION));
+	/* Perform basic profiling calculations (i.e., we don't calculate overlaps,
+	 * which automatically determined with the cf4ocl profiler). */
 
-	/* Destroy profiler object. */
-	ccl_prof_destroy(prof);
+	/* Total time. */
+	dt = time1.tv_sec - time0.tv_sec;
+	if (time1.tv_usec >= time0.tv_usec)
+		dt = dt + (time1.tv_usec - time0.tv_usec) * 1e-6;
+	else
+		dt = (dt-1) + (1e6 + time1.tv_usec - time0.tv_usec) * 1e-6;
 
-	/* Destroy cf4ocl wrappers - only the ones created with ccl_*_new()
-	 * functions. */
-	if (buf_main) ccl_buffer_destroy(buf_main);
-	if (bufs.bufdev) ccl_buffer_destroy(bufs.bufdev);
-	if (cq_main) ccl_queue_destroy(cq_main);
-	if (bufs.cq) ccl_queue_destroy(bufs.cq);
-	if (kinit) ccl_kernel_destroy(kinit);
-	if (krng) ccl_kernel_destroy(krng);
-	if (prg) ccl_program_destroy(prg);
-	if (ctx) ccl_context_destroy(ctx);
+	/* Initialization kernel time. */
+	status = clGetEventProfilingInfo(evt_kinit, CL_PROFILING_COMMAND_START,
+		sizeof(cl_ulong), &tstart, NULL);
+	HANDLE_ERROR(status);
+	status = clGetEventProfilingInfo(evt_kinit, CL_PROFILING_COMMAND_END,
+		sizeof(cl_ulong), &tend, NULL);
+	tkinit = tend - tstart;
 
+	/* Communication / RNG kernel time. */
+	for (i = 0; i < numiter; i++) {
 
-	/* Free auxiliary vectors. */
+		/* Communication time. */
+		status = clGetEventProfilingInfo(evts[i * 2],
+			CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &tstart, NULL);
+		HANDLE_ERROR(status);
+		status = clGetEventProfilingInfo(evts[i * 2],
+			CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &tend, NULL);
+		HANDLE_ERROR(status);
+		tcomms += tend - tstart;
+
+		/* RNG kernel time. */
+		status = clGetEventProfilingInfo(evts[i * 2 + 1],
+			CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &tstart, NULL);
+		HANDLE_ERROR(status);
+		status = clGetEventProfilingInfo(evts[i * 2 + 1],
+			CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &tend, NULL);
+		HANDLE_ERROR(status);
+		tkrng += tend - tstart;
+
+	}
+
+	/* Show basic profiling info. */
+	fprintf(stderr, " * Total elapsed time                : %es\n", dt);
+	fprintf(stderr, " * Total time in 'init' kernel       : %es\n",
+		(double) tkinit);
+	fprintf(stderr, " * Total time in 'rng' kernel        : %es\n",
+		(double) tkrng);
+	fprintf(stderr, " * Total time fetching data from GPU : %es\n",
+		(double) tcomms);
+	fprintf(stderr, "\n");
+
+	/* Destroy OpenCL objects. */
+	if (evt_kinit) clReleaseEvent(evt_kinit);
+	for (i = 0; i < numiter * 2; i++) {
+		if (evts[i]) clReleaseEvent(evts[i]);
+	}
+	if (buf_main) clReleaseMemObject(buf_main);
+	if (bufs.bufdev) clReleaseMemObject(bufs.bufdev);
+	if (cq_main) clReleaseCommandQueue(cq_main);
+	if (bufs.cq) clReleaseCommandQueue(bufs.cq);
+	if (kernels[0]) clReleaseKernel(kernels[0]);
+	if (kernels[1]) clReleaseKernel(kernels[1]);
+	if (prg) clReleaseProgram(prg);
+	if (ctx) clReleaseContext(ctx);
+
+	/* Free platforms buffer. */
 	if (platfs) free(platfs);
+
+	/* Free event buffers. */
+	if (evts) free(evts);
 
 	/* Free host resources */
 	if (bufs.bufhost) free(bufs.bufhost);
+
+	/* Free kernel sources. */
+	if (ksources[0]) free(ksources[0]);
+	if (ksources[1]) free(ksources[1]);
+
+	/* Free device name. */
+	free(dev_name);
 
 	/* Bye. */
 	return EXIT_SUCCESS;

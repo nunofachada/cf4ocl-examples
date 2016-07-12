@@ -19,10 +19,11 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(CF4OCL2 REQUIRED cf4ocl2>=2.0.0)
 pkg_check_modules(GLIB REQUIRED glib-2.0>=2.32.1)
 find_package(OpenMP QUIET)
+find_package(OpenCL REQUIRED)
 
 # Library include directories
-include_directories(
-	${CF4OCL2_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
+include_directories(${OpenCL_INCLUDE_DIRS} ${CF4OCL2_INCLUDE_DIRS}
+	${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
 
 # Add src folder
 add_subdirectory(src)
