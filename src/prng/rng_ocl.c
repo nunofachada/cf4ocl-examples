@@ -18,14 +18,17 @@
 
 /**
  * @file
- * Generate random numbers with OpenCL using the cf4ocl library.
+ * Generate random numbers with OpenCL using the OpenCL host API.
  *
  * Compile with gcc or clang:
- * $ gcc -pthread -Wall -std=c99 `pkg-config --cflags cf4ocl2` \
- *       rng_ccl.c -o rng_ccl `pkg-config --libs cf4ocl2`
+ * $ gcc -pthread -Wall -std=c99 rng_ocl.c -o rng_ocl -lOpenCL
  */
 
-#include <cf4ocl2.h>
+#if defined(__APPLE__) || defined(__MACOSX)
+	#include <OpenCL/opencl.h>
+#else
+	#include <CL/opencl.h>
+#endif
 #include <pthread.h>
 #include <assert.h>
 
@@ -36,9 +39,9 @@
 #define NUMITER_DEFAULT 10000
 
 /* Error handling macro. */
-#define HANDLE_ERROR(err) \
-	do { if (err != NULL) { \
-		fprintf(stderr, "\nError at line %d: %s\n", __LINE__, err->message); \
+#define HANDLE_ERROR(status) \
+	do { if (status != CL_SUCCESS) { \
+		fprintf(stderr, "\nOpenCL error %d at line %d\n", status, __LINE__); \
 		exit(EXIT_FAILURE); } \
 	} while(0)
 
@@ -54,13 +57,13 @@ struct bufshare {
 	cl_ulong * bufhost;
 
 	/* Device buffer. */
-	CCLBuffer * bufdev;
+	cl_mem * bufdev;
 
 	/* Command queue for data transfers. */
-	CCLQueue * cq;
+	cl_command_queue * cq;
 
 	/* Possible transfer error. */
-	CCLErr* err;
+	cl_int status;
 
 	/* Number of random numbers in buffer. */
 	cl_uint numrn;
@@ -77,10 +80,10 @@ void * rng_out(void * arg) {
 	struct bufshare * bufs = (struct bufshare *) arg;
 
 	/* Wait on transfer. */
-	ccl_queue_finish(bufs->cq, &bufs->err);
+	bufs->status = clFinish(buds->cq);
 
 	/* If error occurs let main thread handle it. */
-	if (bufs->err) return NULL;
+	if (bufs->status != CL_SUCCESS) return NULL;
 
 	/* Write*/
 	fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
@@ -108,21 +111,27 @@ int main(int argc, char **argv) {
 	/* Thread status. */
 	int sth;
 
-	/* cf4ocl wrappers. */
-	CCLContext * ctx = NULL;
-	CCLDevice * dev = NULL;
-	CCLProgram * prg = NULL;
-	CCLKernel * kinit = NULL, *krng = NULL;
-	CCLQueue * cq_main = NULL;
-	CCLBuffer * buf_main = NULL, * bufswp = NULL;
-	CCLEvent * evt_exec = NULL, * evt_comms = NULL;
-	CCLEventWaitList ewl = NULL;
+	/* OpenCL objects. */
+	cl_context ctx = NULL;
+	cl_device_id dev = NULL;
+	cl_program prg = NULL;
+	cl_kernel kinit = NULL, krng = NULL;
+	cl_command_queue cq_main = NULL;
+	cl_mem buf_main = NULL, bufswp = NULL;
+	cl_event evt_exec = NULL, evt_comms = NULL;
+	cl_platform_id *platfs = NULL;
 
-	/* Profiler object. */
-	CCLProf* prof = NULL;
+ 	/* Number of platforms. */
+ 	cl_uint nplats;
 
-	/* Error management object. */
-	CCLErr *err = NULL;
+ 	/* Number of devices in platform. */
+ 	cl_uint ndevs;
+
+	/* Event wait list. */
+	cl_event ewl[2];
+
+	/* Status flag. */
+	cl_int status;
 
 	/* Real and kernel work sizes. */
 	size_t rws, gws1, gws2, lws1, lws2;
@@ -151,10 +160,40 @@ int main(int argc, char **argv) {
 		numiter = NUMITER_DEFAULT;
 	}
 
-	/* Setup OpenCL context with GPU device. */
+	/* Determine number of OpenCL platforms. */
+	status = clGetPlatformIDs(0, NULL, &nplatfs);
+	HANDLE_ERROR(status);
+
+	/* Allocate memory for existing platforms. */
+	platfs = (cl_platform_id*) malloc(sizeof(cl_platform_id) * nplatfs);
+
+	/* Get existing OpenCL platforms. */
+	status = clGetPlatformIDs(nplatfs, platfs, NULL);
+	HANDLE_ERROR(status);
+
+	/* Cycle through platforms until a GPU device is found. */
+	for (unsigned int i = 0; i < nplatfs; i++) {
+
+		/* Determine number of GPU devices in current platform. */
+		status = clGetDeviceIDs(platfs[i], CL_DEVICE_TYPE_GPU, 0, NULL, &ndevs);
+		HANDLE_ERROR(status);
+
+		/* Was any GPU device found in current platform? */
+		if (ndevs > 0) {
+
+			/* If so, get first device. */
+			status = clGetDeviceIDs(
+				platfs[i], CL_DEVICE_TYPE_GPU, 1, &dev, NULL);
+			HANDLE_ERROR(status);
+		}
+	}
+
+	/* If no GPU device was found, give up. */
+	assert(dev != NULL);
+
+	/* Create context. */
 	ctx = ccl_context_new_gpu(&err);
 	HANDLE_ERROR(err);
-	// TODO: Check that a device was found
 
 	/* Get device. */
 	dev = ccl_context_get_device(ctx, 0, &err);
@@ -203,7 +242,6 @@ int main(int argc, char **argv) {
 	HANDLE_ERROR(err);
 
 	/* Print information. */
-	// TODO Print device name
 	fprintf(stderr, " * Global/local work sizes (init): %u/%u\n",
 		(unsigned int) gws1, (unsigned int) lws1);
 	fprintf(stderr, " * Global/local work sizes (rng) : %u/%u\n",
@@ -294,6 +332,10 @@ int main(int argc, char **argv) {
 	if (krng) ccl_kernel_destroy(krng);
 	if (prg) ccl_program_destroy(prg);
 	if (ctx) ccl_context_destroy(ctx);
+
+
+	/* Free auxiliary vectors. */
+	if (platfs) free(platfs);
 
 	/* Free host resources */
 	if (bufs.bufhost) free(bufs.bufhost);
