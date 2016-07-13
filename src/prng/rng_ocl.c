@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
 	cl_context ctx = NULL;
 	cl_device_id dev = NULL;
 	cl_program prg = NULL;
-	cl_kernel kernels[2] = { NULL, NULL };
+	cl_kernel kinit = NULL, krng = NULL;
 	cl_command_queue cq_main = NULL;
 	cl_mem buf_main = NULL, bufswp = NULL;
 	cl_event evt_kinit = NULL;
@@ -307,8 +307,12 @@ int main(int argc, char **argv) {
 
 	}
 
-	/* Get kernels. */
-	status = clCreateKernelsInProgram(prg, 2, kernels, NULL);
+	/* Create init kernel. */
+	kinit = clCreateKernel(prg, KERNEL_INIT, &status);
+	HANDLE_ERROR(status);
+
+	/* Create rng kernel. */
+	krng = clCreateKernel(prg, KERNEL_RNG, &status);
 	HANDLE_ERROR(status);
 
 	/* Determine work sizes for each kernel. This is a minimum LOC approach
@@ -317,13 +321,13 @@ int main(int argc, char **argv) {
 	 * function, namely multiple dimensions, OpenCL 1.0, kernel information
 	 * unavailable, etc. */
 	status = clGetKernelWorkGroupInfo(
-		kernels[0], dev, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE,
+		kinit, dev, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE,
 		sizeof(size_t), &lws1, NULL);
 	HANDLE_ERROR(status);
 	gws1 = ((rws / lws1) + (((rws % lws1) > 0) ? 1 : 0)) * lws1;
 
 	status = clGetKernelWorkGroupInfo(
-		kernels[1], dev, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE,
+		krng, dev, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE,
 		sizeof(size_t), &lws2, NULL);
 	HANDLE_ERROR(status);
 	gws2 = ((rws / lws2) + (((rws % lws2) > 0) ? 1 : 0)) * lws2;
@@ -358,20 +362,20 @@ int main(int argc, char **argv) {
 
 	/* Set arguments for initialization kernel. */
 	status = clSetKernelArg(
-		kernels[0], 0, sizeof(cl_mem), (const void *) &bufs.bufdev);
+		kinit, 0, sizeof(cl_mem), (const void *) &bufs.bufdev);
 	HANDLE_ERROR(status);
 	status = clSetKernelArg(
-		kernels[0], 1, sizeof(cl_uint), (const void *) &bufs.numrn);
+		kinit, 1, sizeof(cl_uint), (const void *) &bufs.numrn);
 	HANDLE_ERROR(status);
 
 	/* Invoke initialization kernel. */
-	status = clEnqueueNDRangeKernel(cq_main, kernels[0], 1, NULL,
+	status = clEnqueueNDRangeKernel(cq_main, kinit, 1, NULL,
 		(const size_t *) &gws1, (const size_t *) &lws1, 0, NULL, &evt_kinit);
 	HANDLE_ERROR(status);
 
 	/* Set fixed argument of RNG kernel (number of random numbers in buffer). */
 	status = clSetKernelArg(
-		kernels[1], 0, sizeof(cl_uint), (const void *) &bufs.numrn);
+		krng, 0, sizeof(cl_uint), (const void *) &bufs.numrn);
 	HANDLE_ERROR(status);
 
 	/* Wait for initialization to finish. */
@@ -393,15 +397,15 @@ int main(int argc, char **argv) {
 
 		/* Set RNG kernel arguments. */
 		status = clSetKernelArg(
-			kernels[1], 1, sizeof(cl_mem), (const void *) &bufs.bufdev);
+			krng, 1, sizeof(cl_mem), (const void *) &bufs.bufdev);
 		HANDLE_ERROR(status);
 
 		status = clSetKernelArg(
-			kernels[1], 2, sizeof(cl_mem), (const void *) &buf_main);
+			krng, 2, sizeof(cl_mem), (const void *) &buf_main);
 		HANDLE_ERROR(status);
 
 		/* Run RNG kernel. */
-		status = clEnqueueNDRangeKernel(cq_main, kernels[1], 1, NULL,
+		status = clEnqueueNDRangeKernel(cq_main, krng, 1, NULL,
 			(const size_t *) &gws2, (const size_t *) &lws2, 0, NULL,
 			&evts[i * 2 + 1]);
 		HANDLE_ERROR(status);
@@ -489,14 +493,10 @@ int main(int argc, char **argv) {
 	if (bufs.bufdev) clReleaseMemObject(bufs.bufdev);
 	if (cq_main) clReleaseCommandQueue(cq_main);
 	if (bufs.cq) clReleaseCommandQueue(bufs.cq);
+	if (kinit) clReleaseKernel(kinit);
+	if (krng) clReleaseKernel(krng);
 	if (prg) clReleaseProgram(prg);
 	if (ctx) clReleaseContext(ctx);
-
-	/* Free kernel objects and kernel sources. */
-	for (i = 0; i < 2; i++) {
-		if (ksources[i]) free(ksources[i]);
-		if (kernels[i]) clReleaseKernel(kernels[i]);
-	}
 
 	/* Free platforms buffer. */
 	if (platfs) free(platfs);
