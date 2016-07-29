@@ -114,7 +114,7 @@ void * rng_out(void * arg) {
 	struct bufshare * bufs = (struct bufshare *) arg;
 
 	/* Read random numbers and write them to stdout. */
-	for (bufs->i_comm = 0; bufs->i_comm < bufs->numiter; ) {
+	for (bufs->i_comm = 0; ; ) {
 
 		/* Read data from device buffer into host buffer. */
 		ccl_buffer_enqueue_read(bufs->bufdev, bufs->cq, CL_TRUE, 0,
@@ -128,6 +128,9 @@ void * rng_out(void * arg) {
 
 		/* Write raw random numbers to stdout. */
 		fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
+
+		/* Did we reach the end of the loop? */
+		if (bufs->i_comm == bufs->numiter - 1) return NULL;
 
 		/* Wait for RNG kernel from previous iteration before proceding with
 		 * next read. */
@@ -321,9 +324,6 @@ int main(int argc, char **argv) {
 		update_and_notify(&bufs.i_rng, &mut_rng, &cond_rng);
 
 	}
-
-	/* Signal that RNG kernel from previous iteration is over. */
-	update_and_notify(&bufs.i_rng, &mut_rng, &cond_rng);
 
 	/* Wait for output thread to finish. */
 	sth = pthread_join(comms_th, NULL);
