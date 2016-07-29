@@ -47,6 +47,14 @@
 #define KERNEL_RNG "rng"
 const char* kernel_filenames[] = { KERNEL_INIT ".cl", KERNEL_RNG ".cl" };
 
+/* Thread sync. variables. */
+pthread_mutex_t
+	mut_rng = PTHREAD_MUTEX_INITIALIZER,
+	mut_comm = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t
+	cond_rng = PTHREAD_COND_INITIALIZER,
+	cond_comm = PTHREAD_COND_INITIALIZER;
+
 /* Information shared between main thread and data transfer/output thread. */
 struct bufshare {
 
@@ -65,6 +73,15 @@ struct bufshare {
 	/* Number of random numbers in buffer. */
 	cl_uint numrn;
 
+	/* Number of iterations producing random numbers. */
+	unsigned int numiter;
+
+	/* Current iteration for the RNG kernel. */
+	unsigned int i_rng;
+
+	/* Current iteration for the rng_out function/thread. */
+	unsigned int i_comm;
+
 	/* Buffer size in bytes. */
 	size_t bufsize;
 
@@ -76,14 +93,32 @@ void * rng_out(void * arg) {
 	/* Unwrap argument. */
 	struct bufshare * bufs = (struct bufshare *) arg;
 
-	/* Wait on transfer. */
-	ccl_queue_finish(bufs->cq, &bufs->err);
+	/* Read random numbers and write them to stdout. */
+	for (bufs->i_comm = 0; bufs->i_comm < bufs->numiter; ) {
 
-	/* If error occurs let main thread handle it. */
-	if (bufs->err) return NULL;
+		/* Read data from device buffer into host buffer. */
+		ccl_buffer_enqueue_read(bufs->bufdev, bufs->cq, CL_TRUE, 0,
+			bufs->bufsize, bufs->bufhost, NULL, &bufs->err);
 
-	/* Write*/
-	fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
+		/* If error occurs let main thread handle it. */
+		if (bufs->err) return NULL;
+
+		/* Signal that read for current iteration is over. */
+		pthread_mutex_lock(&mut_comm);
+		bufs->i_comm++;
+		pthread_cond_signal(&cond_comm);
+		pthread_mutex_unlock(&mut_comm);
+
+		/* Write raw random numbers to stdout. */
+		fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
+
+		/* Wait for RNG kernel from previous iteration before proceding with
+		 * next read. */
+		pthread_mutex_lock(&mut_rng);
+		while (bufs->i_comm > bufs->i_rng)
+			pthread_cond_wait(&cond_rng, &mut_rng);
+		pthread_mutex_unlock(&mut_rng);
+	}
 
 	/* Bye. */
 	return NULL;
@@ -100,7 +135,7 @@ void * rng_out(void * arg) {
 int main(int argc, char **argv) {
 
 	/* Host buffer. */
-	struct bufshare bufs = { NULL, NULL, NULL, NULL, 0, 0 };
+	struct bufshare bufs = { NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0 };
 
 	/* Communications thread. */
 	pthread_t comms_th;
@@ -115,8 +150,7 @@ int main(int argc, char **argv) {
 	CCLKernel * kinit = NULL, *krng = NULL;
 	CCLQueue * cq_main = NULL;
 	CCLBuffer * buf_main = NULL, * bufswp = NULL;
-	CCLEvent * evt_exec = NULL, * evt_comms = NULL;
-	CCLEventWaitList ewl = NULL;
+	CCLEvent * evt_exec = NULL;
 
 	/* Profiler object. */
 	CCLProf* prof = NULL;
@@ -129,9 +163,6 @@ int main(int argc, char **argv) {
 
 	/* Real and kernel work sizes. */
 	size_t rws = 0, gws1 = 0, gws2 = 0, lws1 = 0, lws2 = 0;
-
-	/* Number of iterations producing random numbers. */
-	unsigned int numiter;
 
 	/* Program build log. */
 	const char * bldlog;
@@ -151,10 +182,10 @@ int main(int argc, char **argv) {
 	/* Did user specify a number of iterations producing random numbers? */
 	if (argc >= 3) {
 		/* Yes, use it. */
-		numiter = atoi(argv[2]);
+		bufs.numiter = atoi(argv[2]);
 	} else {
 		/* No, use defaults. */
-		numiter = NUMITER_DEFAULT;
+		bufs.numiter = NUMITER_DEFAULT;
 	}
 
 	/* Setup OpenCL context with GPU device. */
@@ -222,7 +253,7 @@ int main(int argc, char **argv) {
 	fprintf(stderr, " * Global/local work sizes (rng) : %u/%u\n",
 		(unsigned int) gws2, (unsigned int) lws2);
 	fprintf(stderr, " * Number of iterations          : %u\n",
-		(unsigned int) numiter);
+		(unsigned int) bufs.numiter);
 
 	/* Initialize profiling. */
 	prof = ccl_prof_new();
@@ -243,18 +274,19 @@ int main(int argc, char **argv) {
 	ccl_queue_finish(cq_main, &err);
 	HANDLE_ERROR(err);
 
+	/* Invoke thread to output random numbers to stdout
+	 * (in raw, binary form). */
+	sth = pthread_create(&comms_th, NULL, rng_out, &bufs);
+	assert(sth == 0);
+
 	/* Produce random numbers. */
-	for (unsigned int i = 0; i < numiter; i++) {
+	for (bufs.i_rng = 0; bufs.i_rng < bufs.numiter - 1; ) {
 
-		/* Read data from device buffer into host buffer (non-blocking call). */
-		evt_comms = ccl_buffer_enqueue_read(bufs.bufdev, bufs.cq, CL_FALSE, 0,
-			bufs.bufsize, bufs.bufhost, NULL, &err);
-		HANDLE_ERROR(err);
-
-		/* Invoke thread to output random numbers to stdout
-		 * (in raw, binary form). */
-		sth = pthread_create(&comms_th, NULL, rng_out, &bufs);
-		assert(sth == 0);
+		/* Wait for read from previous iteration. */
+		pthread_mutex_lock(&mut_comm);
+		while (bufs.i_rng < bufs.i_comm)
+			pthread_cond_wait(&cond_comm, &mut_comm);
+		pthread_mutex_unlock(&mut_comm);
 
 		/* Run random number generation kernel. */
 		evt_exec = ccl_kernel_set_args_and_enqueue_ndrange(krng, cq_main, 1,
@@ -264,25 +296,33 @@ int main(int argc, char **argv) {
 		HANDLE_ERROR(err);
 		ccl_event_set_name(evt_exec, "RNG_KERNEL");
 
-		/* Wait for transfer and for RNG kernel. */
-		ccl_event_wait(ccl_ewl(&ewl, evt_comms, evt_exec, NULL), &err);
+		/* Wait for random number generation kernel to finish. */
+		ccl_queue_finish(cq_main, &err);
 		HANDLE_ERROR(err);
-
-		/* Wait for output thread to finish. */
-		sth = pthread_join(comms_th, NULL);
-		assert(sth == 0);
-		HANDLE_ERROR(bufs.err);
 
 		/* Swap buffers. */
 		bufswp = buf_main;
 		buf_main = bufs.bufdev;
 		bufs.bufdev = bufswp;
 
+		/* Signal that RNG kernel from previous iteration is over. */
+		pthread_mutex_lock(&mut_rng);
+		bufs.i_rng++;
+		pthread_cond_signal (&cond_rng);
+		pthread_mutex_unlock(&mut_rng);
+
 	}
 
-	/* Wait for all operations to finish. */
-	ccl_queue_finish(cq_main, &err);
-	HANDLE_ERROR(err);
+	/* Signal that RNG kernel from previous iteration is over. */
+	pthread_mutex_lock(&mut_rng);
+	bufs.i_rng++;
+	pthread_cond_signal (&cond_rng);
+	pthread_mutex_unlock(&mut_rng);
+
+	/* Wait for output thread to finish. */
+	sth = pthread_join(comms_th, NULL);
+	assert(sth == 0);
+	HANDLE_ERROR(bufs.err);
 
 	/* Perform profiling. */
 	ccl_prof_stop(prof);
