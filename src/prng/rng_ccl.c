@@ -55,6 +55,26 @@ pthread_cond_t
 	cond_rng = PTHREAD_COND_INITIALIZER,
 	cond_comm = PTHREAD_COND_INITIALIZER;
 
+inline void update_and_notify(
+	unsigned int * i, pthread_mutex_t * mut, pthread_cond_t * cond) {
+
+	pthread_mutex_lock(mut);
+	(*i)++;
+	pthread_cond_signal(cond);
+	pthread_mutex_unlock(mut);
+}
+
+inline void wait_for_update(
+	unsigned int * i, unsigned int * j,
+	pthread_mutex_t * mut, pthread_cond_t * cond) {
+
+	pthread_mutex_lock(mut);
+	while (*i > *j)
+		pthread_cond_wait(cond, mut);
+	pthread_mutex_unlock(mut);
+
+}
+
 /* Information shared between main thread and data transfer/output thread. */
 struct bufshare {
 
@@ -104,20 +124,15 @@ void * rng_out(void * arg) {
 		if (bufs->err) return NULL;
 
 		/* Signal that read for current iteration is over. */
-		pthread_mutex_lock(&mut_comm);
-		bufs->i_comm++;
-		pthread_cond_signal(&cond_comm);
-		pthread_mutex_unlock(&mut_comm);
+		update_and_notify(&bufs->i_comm, &mut_comm, &cond_comm);
 
 		/* Write raw random numbers to stdout. */
 		fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
 
 		/* Wait for RNG kernel from previous iteration before proceding with
 		 * next read. */
-		pthread_mutex_lock(&mut_rng);
-		while (bufs->i_comm > bufs->i_rng)
-			pthread_cond_wait(&cond_rng, &mut_rng);
-		pthread_mutex_unlock(&mut_rng);
+		wait_for_update(&bufs->i_comm, &bufs->i_rng, &mut_rng, &cond_rng);
+
 	}
 
 	/* Bye. */
@@ -283,10 +298,7 @@ int main(int argc, char **argv) {
 	for (bufs.i_rng = 0; bufs.i_rng < bufs.numiter - 1; ) {
 
 		/* Wait for read from previous iteration. */
-		pthread_mutex_lock(&mut_comm);
-		while (bufs.i_rng < bufs.i_comm)
-			pthread_cond_wait(&cond_comm, &mut_comm);
-		pthread_mutex_unlock(&mut_comm);
+		wait_for_update(&bufs.i_comm, &bufs.i_rng, &mut_comm, &cond_comm);
 
 		/* Run random number generation kernel. */
 		evt_exec = ccl_kernel_set_args_and_enqueue_ndrange(krng, cq_main, 1,
@@ -306,18 +318,12 @@ int main(int argc, char **argv) {
 		bufs.bufdev = bufswp;
 
 		/* Signal that RNG kernel from previous iteration is over. */
-		pthread_mutex_lock(&mut_rng);
-		bufs.i_rng++;
-		pthread_cond_signal (&cond_rng);
-		pthread_mutex_unlock(&mut_rng);
+		update_and_notify(&bufs.i_rng, &mut_rng, &cond_rng);
 
 	}
 
 	/* Signal that RNG kernel from previous iteration is over. */
-	pthread_mutex_lock(&mut_rng);
-	bufs.i_rng++;
-	pthread_cond_signal (&cond_rng);
-	pthread_mutex_unlock(&mut_rng);
+	update_and_notify(&bufs.i_rng, &mut_rng, &cond_rng);
 
 	/* Wait for output thread to finish. */
 	sth = pthread_join(comms_th, NULL);
@@ -335,6 +341,9 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "%s",
 		ccl_prof_get_summary(prof,
 			CCL_PROF_AGG_SORT_TIME, CCL_PROF_OVERLAP_SORT_DURATION));
+
+	/* Save profiling info. */
+    ccl_prof_export_info_file(prof, "prof.tsv", &err);
 
 	/* Destroy profiler object. */
 	ccl_prof_destroy(prof);
