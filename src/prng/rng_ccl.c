@@ -37,8 +37,8 @@
 
 /* Error handling macro. */
 #define HANDLE_ERROR(err) \
-	do { if (err != NULL) { \
-		fprintf(stderr, "\nError at line %d: %s\n", __LINE__, err->message); \
+	do { if ((err) != NULL) { \
+		fprintf(stderr, "\nError at line %d: %s\n", __LINE__, (err)->message); \
 		exit(EXIT_FAILURE); } \
 	} while(0)
 
@@ -55,6 +55,8 @@ pthread_cond_t
 	cond_rng = PTHREAD_COND_INITIALIZER,
 	cond_comm = PTHREAD_COND_INITIALIZER;
 
+/* Update local thread counter and notify the other thread that current thread
+ * did so. */
 inline void update_and_notify(
 	unsigned int * i, pthread_mutex_t * mut, pthread_cond_t * cond) {
 
@@ -64,6 +66,8 @@ inline void update_and_notify(
 	pthread_mutex_unlock(mut);
 }
 
+/* Check if the other thread's counter was updated, otherwise wait for it to
+ * be updated. */
 inline void wait_for_update(
 	unsigned int * i, unsigned int * j,
 	pthread_mutex_t * mut, pthread_cond_t * cond) {
@@ -120,14 +124,16 @@ void * rng_out(void * arg) {
 		ccl_buffer_enqueue_read(bufs->bufdev, bufs->cq, CL_TRUE, 0,
 			bufs->bufsize, bufs->bufhost, NULL, &bufs->err);
 
-		/* If error occurs let main thread handle it. */
-		if (bufs->err) return NULL;
-
 		/* Signal that read for current iteration is over. */
 		update_and_notify(&bufs->i_comm, &mut_comm, &cond_comm);
 
+		/* If error occured in read, terminate thread and let main thread
+		 * handle error. */
+		if (bufs->err) return NULL;
+
 		/* Write raw random numbers to stdout. */
 		fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
+		fflush(stdout);
 
 		/* Did we reach the end of the loop? */
 		if (bufs->i_comm == bufs->numiter - 1) return NULL;
@@ -157,9 +163,6 @@ int main(int argc, char **argv) {
 
 	/* Communications thread. */
 	pthread_t comms_th;
-
-	/* Thread status. */
-	int sth;
 
 	/* cf4ocl wrappers. */
 	CCLContext * ctx = NULL;
@@ -294,14 +297,16 @@ int main(int argc, char **argv) {
 
 	/* Invoke thread to output random numbers to stdout
 	 * (in raw, binary form). */
-	sth = pthread_create(&comms_th, NULL, rng_out, &bufs);
-	assert(sth == 0);
+	pthread_create(&comms_th, NULL, rng_out, &bufs);
 
 	/* Produce random numbers. */
 	for (bufs.i_rng = 0; bufs.i_rng < bufs.numiter - 1; ) {
 
 		/* Wait for read from previous iteration. */
 		wait_for_update(&bufs.i_comm, &bufs.i_rng, &mut_comm, &cond_comm);
+
+		/* Handle possible errors in comms thread. */
+		HANDLE_ERROR(bufs.err);
 
 		/* Run random number generation kernel. */
 		evt_exec = ccl_kernel_set_args_and_enqueue_ndrange(krng, cq_main, 1,
@@ -326,9 +331,7 @@ int main(int argc, char **argv) {
 	}
 
 	/* Wait for output thread to finish. */
-	sth = pthread_join(comms_th, NULL);
-	assert(sth == 0);
-	HANDLE_ERROR(bufs.err);
+	pthread_join(comms_th, NULL);
 
 	/* Perform profiling. */
 	ccl_prof_stop(prof);
