@@ -40,6 +40,7 @@
 #define HANDLE_ERROR(err) \
 	do { if ((err) != NULL) { \
 		fprintf(stderr, "\nError at line %d: %s\n", __LINE__, (err)->message); \
+		ccl_err_clear(&(err)); \
 		exit(EXIT_FAILURE); } \
 	} while(0)
 
@@ -159,8 +160,8 @@ int main(int argc, char **argv) {
 	/* Profiler object. */
 	CCLProf* prof = NULL;
 
-	/* Error management object. */
-	CCLErr *err = NULL;
+	/* Error management objects. */
+	CCLErr * err = NULL, * err_bld;
 
 	/* Device name. */
 	char* dev_name;
@@ -223,8 +224,8 @@ int main(int argc, char **argv) {
 
 	/* Print build log in case of error. */
 	if ((err) && (err->code == CL_BUILD_PROGRAM_FAILURE)) {
-		bldlog = ccl_program_get_build_log(prg, &err);
-		HANDLE_ERROR(err);
+		bldlog = ccl_program_get_build_log(prg, &err_bld);
+		HANDLE_ERROR(err_bld);
 		fprintf(stderr, "Error building program: \n%s", bldlog);
 		exit(EXIT_FAILURE);
 	}

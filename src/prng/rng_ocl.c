@@ -553,6 +553,10 @@ int main(int argc, char **argv) {
 	/* Free device name. */
 	if (dev_name) free(dev_name);
 
+	/* Destroy semaphores. */
+	sem_destroy(&sem_comm);
+	sem_destroy(&sem_rng);
+
 	/* Bye. */
 	return EXIT_SUCCESS;
 
