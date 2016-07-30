@@ -252,6 +252,8 @@ int main(int argc, char **argv) {
 	bufdev2 = ccl_buffer_new(
 		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &err);
 	HANDLE_ERROR(err);
+
+	/* Pass reference of device buffers to shared struct. */
 	bufs.bufdev1 = bufdev1;
 	bufs.bufdev2 = bufdev2;
 
@@ -309,13 +311,13 @@ int main(int argc, char **argv) {
 		ccl_queue_finish(cq_main, &err);
 		HANDLE_ERROR(err);
 
+		/* Signal that RNG kernel from previous iteration is over. */
+		sem_post(&sem_rng);
+
 		/* Swap buffers. */
 		bufswp = bufdev1;
 		bufdev1 = bufdev2;
 		bufdev2 = bufswp;
-
-		/* Signal that RNG kernel from previous iteration is over. */
-		sem_post(&sem_rng);
 
 	}
 

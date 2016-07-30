@@ -30,6 +30,7 @@
 	#include <CL/opencl.h>
 #endif
 #include <pthread.h>
+#include <semaphore.h>
 #include <assert.h>
 #include <sys/time.h>
 #include <stdio.h>
@@ -53,23 +54,34 @@
 #define KERNEL_RNG "rng"
 const char* kernel_filenames[] = { KERNEL_INIT ".cl", KERNEL_RNG ".cl" };
 
+/* Thread semaphores. */
+sem_t sem_rng;
+sem_t sem_comm;
+
 /* Information shared between main thread and data transfer/output thread. */
 struct bufshare {
 
 	/* Host buffer. */
 	cl_ulong * bufhost;
 
-	/* Device buffer. */
-	cl_mem bufdev;
+	/* Device buffers. */
+	cl_mem bufdev1;
+	cl_mem bufdev2;
 
 	/* Command queue for data transfers. */
 	cl_command_queue cq;
+
+	/* Array of RNG kernel and memory transfer events. */
+	cl_event * evts;
 
 	/* Possible transfer error. */
 	cl_int status;
 
 	/* Number of random numbers in buffer. */
 	cl_uint numrn;
+
+	/* Number of iterations producing random numbers. */
+	unsigned int numiter;
 
 	/* Buffer size in bytes. */
 	size_t bufsize;
@@ -79,17 +91,46 @@ struct bufshare {
 /* Write random numbers directly (as binary) to stdout. */
 void * rng_out(void * arg) {
 
+	/* Increment aux variable. */
+	unsigned int i;
+
+	/* Buffer pointers. */
+	cl_mem bufdev1, bufdev2, bufswp;
+
 	/* Unwrap argument. */
 	struct bufshare * bufs = (struct bufshare *) arg;
 
-	/* Wait on transfer. */
-	bufs->status = clFinish(bufs->cq);
+	/* Get initial buffers. */
+	bufdev1 = bufs->bufdev1;
+	bufdev2 = bufs->bufdev2;
 
-	/* If error occurs let main thread handle it. */
-	if (bufs->status != CL_SUCCESS) return NULL;
+	/* Read random numbers and write them to stdout. */
+	for (i = 0; i < bufs->numiter; i++) {
 
-	/* Write*/
-	fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
+		/* Wait for RNG kernel from previous iteration before proceding with
+		 * next read. */
+		sem_wait(&sem_rng);
+
+		/* Read data from device buffer into host buffer. */
+		bufs->status = clEnqueueReadBuffer(bufs->cq, bufdev1, CL_TRUE, 0,
+			bufs->bufsize, bufs->bufhost, 0, NULL, &bufs->evts[i * 2]);
+
+		/* Signal that read for current iteration is over. */
+		sem_post(&sem_comm);
+
+		/* If error occurs let main thread handle it. */
+		if (bufs->status != CL_SUCCESS) return NULL;
+
+		/* Write raw random numbers to stdout. */
+		fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
+		fflush(stdout);
+
+		/* Swap buffers. */
+		bufswp = bufdev1;
+		bufdev1 = bufdev2;
+		bufdev2 = bufswp;
+
+	}
 
 	/* Bye. */
 	return NULL;
@@ -109,13 +150,10 @@ int main(int argc, char **argv) {
 	unsigned int i;
 
 	/* Host buffer. */
-	struct bufshare bufs = { NULL, NULL, NULL, 0, 0, 0 };
+	struct bufshare bufs = { NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0 };
 
 	/* Communications thread. */
 	pthread_t comms_th;
-
-	/* Thread status. */
-	int sth;
 
 	/* OpenCL objects. */
 	cl_context ctx = NULL;
@@ -123,9 +161,8 @@ int main(int argc, char **argv) {
 	cl_program prg = NULL;
 	cl_kernel kinit = NULL, krng = NULL;
 	cl_command_queue cq_main = NULL;
-	cl_mem buf_main = NULL, bufswp = NULL;
+	cl_mem bufdev1 = NULL, bufdev2 = NULL, bufswp = NULL;
 	cl_event evt_kinit = NULL;
-	cl_event * evts = NULL;
 	cl_platform_id * platfs = NULL;
 
 	/* Context properties. */
@@ -153,9 +190,6 @@ int main(int argc, char **argv) {
 	/* Real and kernel work sizes. */
 	size_t rws, gws1, gws2, lws1, lws2;
 
-	/* Number of iterations producing random numbers. */
-	unsigned int numiter;
-
 	/* File pointer for files containing kernels. */
 	FILE * fp;
 
@@ -169,6 +203,10 @@ int main(int argc, char **argv) {
 	struct timeval time1, time0;
 	double dt = 0;
 	cl_ulong tstart, tend, tkinit = 0, tcomms = 0, tkrng = 0;
+
+	/* Initialize semaphores. */
+	sem_init(&sem_rng, 0, 1);
+	sem_init(&sem_comm, 0, 1);
 
 	/* Did user specify a number of random numbers? */
 	if (argc >= 2) {
@@ -185,10 +223,10 @@ int main(int argc, char **argv) {
 	/* Did user specify a number of iterations producing random numbers? */
 	if (argc >= 3) {
 		/* Yes, use it. */
-		numiter = atoi(argv[2]);
+		bufs.numiter = atoi(argv[2]);
 	} else {
 		/* No, use defaults. */
-		numiter = NUMITER_DEFAULT;
+		bufs.numiter = NUMITER_DEFAULT;
 	}
 
 	/* Determine number of OpenCL platforms. */
@@ -336,16 +374,20 @@ int main(int argc, char **argv) {
 	bufs.bufhost = (cl_ulong *) malloc(bufs.bufsize);
 
 	/* Create device buffers. */
-	buf_main = clCreateBuffer(
+	bufdev1 = clCreateBuffer(
 		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &status);
 	HANDLE_ERROR(status);
 
-	bufs.bufdev = clCreateBuffer(
+	bufdev2 = clCreateBuffer(
 		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &status);
 	HANDLE_ERROR(status);
+
+	/* Pass reference of device buffers to shared struct. */
+	bufs.bufdev1 = bufdev1;
+	bufs.bufdev2 = bufdev2;
 
 	/* Initialize events buffers. */
-	evts = (cl_event *) calloc(2 * numiter, sizeof(cl_event));
+	bufs.evts = (cl_event *) calloc(2 * bufs.numiter - 1, sizeof(cl_event));
 
 	/* Print information. */
 	fprintf(stderr, "\n");
@@ -355,14 +397,14 @@ int main(int argc, char **argv) {
 	fprintf(stderr, " * Global/local work sizes (rng) : %u/%u\n",
 		(unsigned int) gws2, (unsigned int) lws2);
 	fprintf(stderr, " * Number of iterations          : %u\n",
-		(unsigned int) numiter);
+		(unsigned int) bufs.numiter);
 
 	/* Start profiling. */
 	gettimeofday(&time0, NULL);
 
 	/* Set arguments for initialization kernel. */
 	status = clSetKernelArg(
-		kinit, 0, sizeof(cl_mem), (const void *) &bufs.bufdev);
+		kinit, 0, sizeof(cl_mem), (const void *) &bufdev1);
 	HANDLE_ERROR(status);
 	status = clSetKernelArg(
 		kinit, 1, sizeof(cl_uint), (const void *) &bufs.numrn);
@@ -382,59 +424,56 @@ int main(int argc, char **argv) {
 	status = clFinish(cq_main);
 	HANDLE_ERROR(status);
 
+	/* Invoke thread to output random numbers to stdout
+	 * (in raw, binary form). */
+	pthread_create(&comms_th, NULL, rng_out, &bufs);
+
 	/* Produce random numbers. */
-	for (i = 0; i < numiter; i++) {
-
-		/* Read data from device buffer into host buffer (non-blocking call). */
-		status = clEnqueueReadBuffer(bufs.cq, bufs.bufdev, CL_FALSE, 0,
-			bufs.bufsize, bufs.bufhost, 0, NULL, &evts[i * 2]);
-		HANDLE_ERROR(status);
-
-		/* Invoke thread to output random numbers to stdout
-		 * (in raw, binary form). */
-		sth = pthread_create(&comms_th, NULL, rng_out, &bufs);
-		assert(sth == 0);
+	for (i = 0; i < bufs.numiter - 1; i++) {
 
 		/* Set RNG kernel arguments. */
 		status = clSetKernelArg(
-			krng, 1, sizeof(cl_mem), (const void *) &bufs.bufdev);
+			krng, 1, sizeof(cl_mem), (const void *) &bufdev1);
 		HANDLE_ERROR(status);
 
 		status = clSetKernelArg(
-			krng, 2, sizeof(cl_mem), (const void *) &buf_main);
+			krng, 2, sizeof(cl_mem), (const void *) &bufdev2);
 		HANDLE_ERROR(status);
+
+		/* Wait for read from previous iteration. */
+		sem_wait(&sem_comm);
+
+		/* Handle possible errors in comms thread. */
+		HANDLE_ERROR(bufs.status);
 
 		/* Run RNG kernel. */
 		status = clEnqueueNDRangeKernel(cq_main, krng, 1, NULL,
 			(const size_t *) &gws2, (const size_t *) &lws2, 0, NULL,
-			&evts[i * 2 + 1]);
+			&bufs.evts[i * 2 + 1]);
 		HANDLE_ERROR(status);
 
-		/* Wait for transfer and for RNG kernel. */
-		status = clWaitForEvents(2, (const cl_event *) &evts[i * 2]);
+		/* Wait for random number generation kernel to finish. */
+		status = clFinish(cq_main);
 		HANDLE_ERROR(status);
 
-		/* Wait for output thread to finish. */
-		sth = pthread_join(comms_th, NULL);
-		assert(sth == 0);
-		HANDLE_ERROR(bufs.status);
+		/* Signal that RNG kernel from previous iteration is over. */
+		sem_post(&sem_rng);
 
 		/* Swap buffers. */
-		bufswp = buf_main;
-		buf_main = bufs.bufdev;
-		bufs.bufdev = bufswp;
+		bufswp = bufdev1;
+		bufdev1 = bufdev2;
+		bufdev2 = bufswp;
 
 	}
 
-	/* Wait for all operations to finish. */
-	status = clFinish(cq_main);
-	HANDLE_ERROR(status);
+	/* Wait for output thread to finish. */
+	pthread_join(comms_th, NULL);
 
 	/* Stop profiling. */
 	gettimeofday(&time1, NULL);
 
 	/* Perform basic profiling calculations (i.e., we don't calculate overlaps,
-	 * which automatically determined with the cf4ocl profiler). */
+	 * which are automatically determined with the cf4ocl profiler). */
 
 	/* Total time. */
 	dt = time1.tv_sec - time0.tv_sec;
@@ -451,23 +490,27 @@ int main(int argc, char **argv) {
 		sizeof(cl_ulong), &tend, NULL);
 	tkinit = tend - tstart;
 
-	/* Communication / RNG kernel time. */
-	for (i = 0; i < numiter; i++) {
+	/* Communication time. */
+	for (i = 0; i < bufs.numiter; i++) {
 
-		/* Communication time. */
-		status = clGetEventProfilingInfo(evts[i * 2],
+		status = clGetEventProfilingInfo(bufs.evts[i * 2],
 			CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &tstart, NULL);
 		HANDLE_ERROR(status);
-		status = clGetEventProfilingInfo(evts[i * 2],
+		status = clGetEventProfilingInfo(bufs.evts[i * 2],
 			CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &tend, NULL);
 		HANDLE_ERROR(status);
 		tcomms += tend - tstart;
 
+	}
+
+	/* RNG kernel time. */
+	for (i = 0; i < bufs.numiter - 1; i++) {
+
 		/* RNG kernel time. */
-		status = clGetEventProfilingInfo(evts[i * 2 + 1],
+		status = clGetEventProfilingInfo(bufs.evts[i * 2 + 1],
 			CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &tstart, NULL);
 		HANDLE_ERROR(status);
-		status = clGetEventProfilingInfo(evts[i * 2 + 1],
+		status = clGetEventProfilingInfo(bufs.evts[i * 2 + 1],
 			CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &tend, NULL);
 		HANDLE_ERROR(status);
 		tkrng += tend - tstart;
@@ -486,11 +529,11 @@ int main(int argc, char **argv) {
 
 	/* Destroy OpenCL objects. */
 	if (evt_kinit) clReleaseEvent(evt_kinit);
-	for (i = 0; i < numiter * 2; i++) {
-		if (evts[i]) clReleaseEvent(evts[i]);
+	for (i = 0; i < bufs.numiter * 2 - 1; i++) {
+		if (bufs.evts[i]) clReleaseEvent(bufs.evts[i]);
 	}
-	if (buf_main) clReleaseMemObject(buf_main);
-	if (bufs.bufdev) clReleaseMemObject(bufs.bufdev);
+	if (bufdev1) clReleaseMemObject(bufdev1);
+	if (bufdev2) clReleaseMemObject(bufdev2);
 	if (cq_main) clReleaseCommandQueue(cq_main);
 	if (bufs.cq) clReleaseCommandQueue(bufs.cq);
 	if (kinit) clReleaseKernel(kinit);
@@ -502,13 +545,13 @@ int main(int argc, char **argv) {
 	if (platfs) free(platfs);
 
 	/* Free event buffers. */
-	if (evts) free(evts);
+	if (bufs.evts) free(bufs.evts);
 
 	/* Free host resources */
 	if (bufs.bufhost) free(bufs.bufhost);
 
 	/* Free device name. */
-	free(dev_name);
+	if (dev_name) free(dev_name);
 
 	/* Bye. */
 	return EXIT_SUCCESS;
