@@ -27,6 +27,7 @@
 
 #include <cf4ocl2.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <assert.h>
 
 /* Number of random number in buffer at each time.*/
@@ -47,37 +48,9 @@
 #define KERNEL_RNG "rng"
 const char* kernel_filenames[] = { KERNEL_INIT ".cl", KERNEL_RNG ".cl" };
 
-/* Thread sync. variables. */
-pthread_mutex_t
-	mut_rng = PTHREAD_MUTEX_INITIALIZER,
-	mut_comm = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t
-	cond_rng = PTHREAD_COND_INITIALIZER,
-	cond_comm = PTHREAD_COND_INITIALIZER;
-
-/* Update local thread counter and notify the other thread that current thread
- * did so. */
-inline void update_and_notify(
-	unsigned int * i, pthread_mutex_t * mut, pthread_cond_t * cond) {
-
-	pthread_mutex_lock(mut);
-	(*i)++;
-	pthread_cond_signal(cond);
-	pthread_mutex_unlock(mut);
-}
-
-/* Check if the other thread's counter was updated, otherwise wait for it to
- * be updated. */
-inline void wait_for_update(
-	unsigned int * i, unsigned int * j,
-	pthread_mutex_t * mut, pthread_cond_t * cond) {
-
-	pthread_mutex_lock(mut);
-	while (*i > *j)
-		pthread_cond_wait(cond, mut);
-	pthread_mutex_unlock(mut);
-
-}
+/* Thread semaphores. */
+sem_t sem_rng;
+sem_t sem_comm;
 
 /* Information shared between main thread and data transfer/output thread. */
 struct bufshare {
@@ -85,8 +58,9 @@ struct bufshare {
 	/* Host buffer. */
 	cl_ulong * bufhost;
 
-	/* Device buffer. */
-	CCLBuffer * bufdev;
+	/* Device buffers. */
+	CCLBuffer * bufdev1;
+	CCLBuffer * bufdev2;
 
 	/* Command queue for data transfers. */
 	CCLQueue * cq;
@@ -100,12 +74,6 @@ struct bufshare {
 	/* Number of iterations producing random numbers. */
 	unsigned int numiter;
 
-	/* Current iteration for the RNG kernel. */
-	unsigned int i_rng;
-
-	/* Current iteration for the rng_out function/thread. */
-	unsigned int i_comm;
-
 	/* Buffer size in bytes. */
 	size_t bufsize;
 
@@ -114,18 +82,32 @@ struct bufshare {
 /* Write random numbers directly (as binary) to stdout. */
 void * rng_out(void * arg) {
 
+	/* Increment aux variable. */
+	unsigned int i;
+
+	/* Buffer pointers. */
+	CCLBuffer * bufdev1, * bufdev2, * bufswp;
+
 	/* Unwrap argument. */
 	struct bufshare * bufs = (struct bufshare *) arg;
 
+	/* Get initial buffers. */
+	bufdev1 = bufs->bufdev1;
+	bufdev2 = bufs->bufdev2;
+
 	/* Read random numbers and write them to stdout. */
-	for (bufs->i_comm = 0; ; ) {
+	for (i = 0; i < bufs->numiter; i++) {
+
+		/* Wait for RNG kernel from previous iteration before proceding with
+		 * next read. */
+		sem_wait(&sem_rng);
 
 		/* Read data from device buffer into host buffer. */
-		ccl_buffer_enqueue_read(bufs->bufdev, bufs->cq, CL_TRUE, 0,
+		ccl_buffer_enqueue_read(bufdev1, bufs->cq, CL_TRUE, 0,
 			bufs->bufsize, bufs->bufhost, NULL, &bufs->err);
 
 		/* Signal that read for current iteration is over. */
-		update_and_notify(&bufs->i_comm, &mut_comm, &cond_comm);
+		sem_post(&sem_comm);
 
 		/* If error occured in read, terminate thread and let main thread
 		 * handle error. */
@@ -135,12 +117,10 @@ void * rng_out(void * arg) {
 		fwrite(bufs->bufhost, sizeof(cl_ulong), (size_t) bufs->numrn, stdout);
 		fflush(stdout);
 
-		/* Did we reach the end of the loop? */
-		if (bufs->i_comm == bufs->numiter - 1) return NULL;
-
-		/* Wait for RNG kernel from previous iteration before proceding with
-		 * next read. */
-		wait_for_update(&bufs->i_comm, &bufs->i_rng, &mut_rng, &cond_rng);
+		/* Swap buffers. */
+		bufswp = bufdev1;
+		bufdev1 = bufdev2;
+		bufdev2 = bufswp;
 
 	}
 
@@ -159,10 +139,13 @@ void * rng_out(void * arg) {
 int main(int argc, char **argv) {
 
 	/* Host buffer. */
-	struct bufshare bufs = { NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0 };
+	struct bufshare bufs = { NULL, NULL, NULL, NULL, NULL, 0, 0, 0 };
 
 	/* Communications thread. */
 	pthread_t comms_th;
+
+	/* Increment aux variable. */
+	unsigned int i;
 
 	/* cf4ocl wrappers. */
 	CCLContext * ctx = NULL;
@@ -170,7 +153,7 @@ int main(int argc, char **argv) {
 	CCLProgram * prg = NULL;
 	CCLKernel * kinit = NULL, *krng = NULL;
 	CCLQueue * cq_main = NULL;
-	CCLBuffer * buf_main = NULL, * bufswp = NULL;
+	CCLBuffer * bufdev1 = NULL, * bufdev2 = NULL, * bufswp = NULL;
 	CCLEvent * evt_exec = NULL;
 
 	/* Profiler object. */
@@ -187,6 +170,10 @@ int main(int argc, char **argv) {
 
 	/* Program build log. */
 	const char * bldlog;
+
+	/* Initialize semaphores. */
+	sem_init(&sem_rng, 0, 1);
+	sem_init(&sem_comm, 0, 1);
 
 	/* Did user specify a number of random numbers? */
 	if (argc >= 2) {
@@ -259,12 +246,14 @@ int main(int argc, char **argv) {
 	bufs.bufhost = (cl_ulong*) malloc(bufs.bufsize);
 
 	/* Create device buffers. */
-	buf_main = ccl_buffer_new(
+	bufdev1 = ccl_buffer_new(
 		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &err);
 	HANDLE_ERROR(err);
-	bufs.bufdev = ccl_buffer_new(
+	bufdev2 = ccl_buffer_new(
 		ctx, CL_MEM_READ_WRITE, bufs.bufsize, NULL, &err);
 	HANDLE_ERROR(err);
+	bufs.bufdev1 = bufdev1;
+	bufs.bufdev2 = bufdev2;
 
 	/* Print information. */
 	fprintf(stderr, "\n");
@@ -283,7 +272,7 @@ int main(int argc, char **argv) {
 	/* Invoke kernel for initializing random numbers. */
 	evt_exec = ccl_kernel_set_args_and_enqueue_ndrange(kinit, cq_main, 1, NULL,
 		(const size_t*) &gws1, (const size_t*) &lws1, NULL, &err,
-		bufs.bufdev, ccl_arg_priv(bufs.numrn, cl_uint), /* Kernel arguments. */
+		bufdev1, ccl_arg_priv(bufs.numrn, cl_uint), /* Kernel arguments. */
 		NULL);
 	HANDLE_ERROR(err);
 	ccl_event_set_name(evt_exec, "INIT_KERNEL");
@@ -300,10 +289,10 @@ int main(int argc, char **argv) {
 	pthread_create(&comms_th, NULL, rng_out, &bufs);
 
 	/* Produce random numbers. */
-	for (bufs.i_rng = 0; bufs.i_rng < bufs.numiter - 1; ) {
+	for (i = 0; i < bufs.numiter - 1; i++) {
 
 		/* Wait for read from previous iteration. */
-		wait_for_update(&bufs.i_comm, &bufs.i_rng, &mut_comm, &cond_comm);
+		sem_wait(&sem_comm);
 
 		/* Handle possible errors in comms thread. */
 		HANDLE_ERROR(bufs.err);
@@ -311,7 +300,7 @@ int main(int argc, char **argv) {
 		/* Run random number generation kernel. */
 		evt_exec = ccl_kernel_set_args_and_enqueue_ndrange(krng, cq_main, 1,
 			NULL, (const size_t*) &gws2, (const size_t*) &lws2, NULL, &err,
-			ccl_arg_skip, bufs.bufdev, buf_main, /* Kernel arguments. */
+			ccl_arg_skip, bufdev1, bufdev2, /* Kernel arguments. */
 			NULL);
 		HANDLE_ERROR(err);
 		ccl_event_set_name(evt_exec, "RNG_KERNEL");
@@ -321,12 +310,12 @@ int main(int argc, char **argv) {
 		HANDLE_ERROR(err);
 
 		/* Swap buffers. */
-		bufswp = buf_main;
-		buf_main = bufs.bufdev;
-		bufs.bufdev = bufswp;
+		bufswp = bufdev1;
+		bufdev1 = bufdev2;
+		bufdev2 = bufswp;
 
 		/* Signal that RNG kernel from previous iteration is over. */
-		update_and_notify(&bufs.i_rng, &mut_rng, &cond_rng);
+		sem_post(&sem_rng);
 
 	}
 
@@ -345,16 +334,13 @@ int main(int argc, char **argv) {
 		ccl_prof_get_summary(prof,
 			CCL_PROF_AGG_SORT_TIME, CCL_PROF_OVERLAP_SORT_DURATION));
 
-	/* Save profiling info. */
-    ccl_prof_export_info_file(prof, "prof.tsv", &err);
-
 	/* Destroy profiler object. */
 	ccl_prof_destroy(prof);
 
 	/* Destroy cf4ocl wrappers - only the ones created with ccl_*_new()
 	 * functions. */
-	if (buf_main) ccl_buffer_destroy(buf_main);
-	if (bufs.bufdev) ccl_buffer_destroy(bufs.bufdev);
+	if (bufdev1) ccl_buffer_destroy(bufdev1);
+	if (bufdev2) ccl_buffer_destroy(bufdev2);
 	if (cq_main) ccl_queue_destroy(cq_main);
 	if (bufs.cq) ccl_queue_destroy(bufs.cq);
 	if (prg) ccl_program_destroy(prg);
@@ -362,6 +348,10 @@ int main(int argc, char **argv) {
 
 	/* Free host resources */
 	if (bufs.bufhost) free(bufs.bufhost);
+
+	/* Destroy semaphores. */
+	sem_destroy(&sem_comm);
+	sem_destroy(&sem_rng);
 
 	/* Check that all cf4ocl wrapper objects are destroyed. */
 	assert(ccl_wrapper_memcheck());
