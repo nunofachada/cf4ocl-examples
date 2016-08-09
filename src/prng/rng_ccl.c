@@ -30,6 +30,14 @@
 #include <semaphore.h>
 #include <assert.h>
 
+/* Define command queue flags depending on whether the profiling compile-time
+ * flag set is set or not. */
+#ifdef WITH_PROFILING
+	#define CQ_FLAGS CL_QUEUE_PROFILING_ENABLE
+#else
+	#define CQ_FLAGS 0
+#endif
+
 /* Number of random number in buffer at each time.*/
 #define NUMRN_DEFAULT 16777216
 
@@ -210,9 +218,9 @@ int main(int argc, char **argv) {
 	HANDLE_ERROR(err);
 
 	/* Create command queues. */
-	cq_main = ccl_queue_new(ctx, dev, CL_QUEUE_PROFILING_ENABLE, &err);
+	cq_main = ccl_queue_new(ctx, dev, CQ_FLAGS, &err);
 	HANDLE_ERROR(err);
-	bufs.cq = ccl_queue_new(ctx, dev, CL_QUEUE_PROFILING_ENABLE, &err);
+	bufs.cq = ccl_queue_new(ctx, dev, CQ_FLAGS, &err);
 	HANDLE_ERROR(err);
 
 	/* Create program. */
@@ -327,10 +335,12 @@ int main(int argc, char **argv) {
 
 	/* Perform profiling. */
 	ccl_prof_stop(prof);
+#ifdef WITH_PROFILING
 	ccl_prof_add_queue(prof, "Main", cq_main);
 	ccl_prof_add_queue(prof, "Comms", bufs.cq);
 	ccl_prof_calc(prof, &err);
 	HANDLE_ERROR(err);
+#endif
 
 	/* Show profiling info. */
 	fprintf(stderr, "%s",

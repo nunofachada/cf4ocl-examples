@@ -10,6 +10,12 @@ set(${PROJECT_NAME}_VERSION_STRING "2.1.0")
 # Set log domain
 add_definitions(-DG_LOG_DOMAIN=\"${PROJECT_NAME}\")
 
+# Activate profiling?
+option(PROFILING "Use OpenCL profiling?" ON)
+if (${PROFILING})
+	add_definitions(-DWITH_PROFILING)
+endif()
+
 # Compiler options for GCC/Clang
 # -Wno-comment because of comment within comment in OpenCL headers
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wno-comment -std=c99")

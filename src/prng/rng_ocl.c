@@ -36,6 +36,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* Define command queue flags depending on whether the profiling compile-time
+ * flag set is set or not. */
+#ifdef WITH_PROFILING
+	#define CQ_FLAGS CL_QUEUE_PROFILING_ENABLE
+#else
+	#define CQ_FLAGS 0
+#endif
+
 /* Number of random number in buffer at each time.*/
 #define NUMRN_DEFAULT 16777216
 
@@ -202,7 +210,9 @@ int main(int argc, char **argv) {
 	/* Variables for measuring execution time. */
 	struct timeval time1, time0;
 	double dt = 0;
+#ifdef WITH_PROFILING
 	cl_ulong tstart, tend, tkinit = 0, tcomms = 0, tkrng = 0;
+#endif
 
 	/* Initialize semaphores. */
 	sem_init(&sem_rng, 0, 1);
@@ -284,12 +294,10 @@ int main(int argc, char **argv) {
 	 * such OpenCL versions. In cf4ocl the appropriate constructor is invoked
 	 * depending on the underlying platform and the OpenCL version cf4ocl was
 	 * built against. */
-	cq_main = clCreateCommandQueue(
-		ctx, dev, CL_QUEUE_PROFILING_ENABLE, &status);
+	cq_main = clCreateCommandQueue(ctx, dev, CQ_FLAGS, &status);
 	HANDLE_ERROR(status);
 
-	bufs.cq = clCreateCommandQueue(
-		ctx, dev, CL_QUEUE_PROFILING_ENABLE, &status);
+	bufs.cq = clCreateCommandQueue(ctx, dev, CQ_FLAGS, &status);
 	HANDLE_ERROR(status);
 
 	/* Read kernel sources into strings. */
@@ -482,6 +490,11 @@ int main(int argc, char **argv) {
 	else
 		dt = (dt-1) + (1e6 + time1.tv_usec - time0.tv_usec) * 1e-6;
 
+	/* Show elapsed time. */
+	fprintf(stderr, " * Total elapsed time                : %es\n", dt);
+
+#ifdef WITH_PROFILING
+
 	/* Initialization kernel time. */
 	status = clGetEventProfilingInfo(evt_kinit, CL_PROFILING_COMMAND_START,
 		sizeof(cl_ulong), &tstart, NULL);
@@ -518,7 +531,6 @@ int main(int argc, char **argv) {
 	}
 
 	/* Show basic profiling info. */
-	fprintf(stderr, " * Total elapsed time                : %es\n", dt);
 	fprintf(stderr, " * Total time in 'init' kernel       : %es\n",
 		(double) (tkinit * 1e-9));
 	fprintf(stderr, " * Total time in 'rng' kernel        : %es\n",
@@ -526,6 +538,8 @@ int main(int argc, char **argv) {
 	fprintf(stderr, " * Total time fetching data from GPU : %es\n",
 		(double) (tcomms * 1e-9));
 	fprintf(stderr, "\n");
+
+#endif
 
 	/* Destroy OpenCL objects. */
 	if (evt_kinit) clReleaseEvent(evt_kinit);
