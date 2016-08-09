@@ -333,19 +333,30 @@ int main(int argc, char **argv) {
 	/* Wait for output thread to finish. */
 	pthread_join(comms_th, NULL);
 
-	/* Perform profiling. */
+	/* Stop profiling. */
 	ccl_prof_stop(prof);
+
 #ifdef WITH_PROFILING
+
+	/* Add queues to the profiler object. */
 	ccl_prof_add_queue(prof, "Main", cq_main);
 	ccl_prof_add_queue(prof, "Comms", bufs.cq);
+
+	/* Perform profiling calculations. */
 	ccl_prof_calc(prof, &err);
 	HANDLE_ERROR(err);
-#endif
 
 	/* Show profiling info. */
 	fprintf(stderr, "%s",
 		ccl_prof_get_summary(prof,
 			CCL_PROF_AGG_SORT_TIME, CCL_PROF_OVERLAP_SORT_DURATION));
+#else
+
+	/* Show elapsed time. */
+	fprintf(stderr, " * Total elapsed time                : %es\n",
+		ccl_prof_time_elapsed(prof));
+
+#endif
 
 	/* Destroy profiler object. */
 	ccl_prof_destroy(prof);
