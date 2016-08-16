@@ -45,7 +45,10 @@ typedef struct {
  * */
 static inline void cp_sem_init(cp_sem_t * s, unsigned int val) {
 #ifdef __APPLE__
-	s->sem = dispatch_semaphore_create((long) val);
+	unsigned int i;
+	s->sem = dispatch_semaphore_create(0);
+	for (i = 0; i < val; i++)
+		dispatch_semaphore_signal(s->sem);
 #else
 	sem_init(&s->sem, 0, val);
 #endif
