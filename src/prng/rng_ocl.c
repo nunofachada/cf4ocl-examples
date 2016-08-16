@@ -30,11 +30,11 @@
 	#include <CL/opencl.h>
 #endif
 #include <pthread.h>
-#include <semaphore.h>
 #include <assert.h>
 #include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "cp_sem.h"
 
 /* Define command queue flags depending on whether the profiling compile-time
  * flag set is set or not. */
@@ -63,8 +63,8 @@
 const char* kernel_filenames[] = { KERNEL_INIT ".cl", KERNEL_RNG ".cl" };
 
 /* Thread semaphores. */
-sem_t sem_rng;
-sem_t sem_comm;
+cp_sem_t sem_rng;
+cp_sem_t sem_comm;
 
 /* Information shared between main thread and data transfer/output thread. */
 struct bufshare {
@@ -117,14 +117,14 @@ void * rng_out(void * arg) {
 
 		/* Wait for RNG kernel from previous iteration before proceding with
 		 * next read. */
-		sem_wait(&sem_rng);
+		cp_sem_wait(&sem_rng);
 
 		/* Read data from device buffer into host buffer. */
 		bufs->status = clEnqueueReadBuffer(bufs->cq, bufdev1, CL_TRUE, 0,
 			bufs->bufsize, bufs->bufhost, 0, NULL, &bufs->evts[i * 2]);
 
 		/* Signal that read for current iteration is over. */
-		sem_post(&sem_comm);
+		cp_sem_post(&sem_comm);
 
 		/* If error occurs let main thread handle it. */
 		if (bufs->status != CL_SUCCESS) return NULL;
@@ -215,8 +215,8 @@ int main(int argc, char **argv) {
 #endif
 
 	/* Initialize semaphores. */
-	sem_init(&sem_rng, 0, 1);
-	sem_init(&sem_comm, 0, 1);
+	cp_sem_init(&sem_rng, 1);
+	cp_sem_init(&sem_comm, 1);
 
 	/* Did user specify a number of random numbers? */
 	if (argc >= 2) {
@@ -449,7 +449,7 @@ int main(int argc, char **argv) {
 		HANDLE_ERROR(status);
 
 		/* Wait for read from previous iteration. */
-		sem_wait(&sem_comm);
+		cp_sem_wait(&sem_comm);
 
 		/* Handle possible errors in comms thread. */
 		HANDLE_ERROR(bufs.status);
@@ -465,7 +465,7 @@ int main(int argc, char **argv) {
 		HANDLE_ERROR(status);
 
 		/* Signal that RNG kernel from previous iteration is over. */
-		sem_post(&sem_rng);
+		cp_sem_post(&sem_rng);
 
 		/* Swap buffers. */
 		bufswp = bufdev1;
@@ -568,8 +568,8 @@ int main(int argc, char **argv) {
 	if (dev_name) free(dev_name);
 
 	/* Destroy semaphores. */
-	sem_destroy(&sem_comm);
-	sem_destroy(&sem_rng);
+	cp_sem_destroy(&sem_comm);
+	cp_sem_destroy(&sem_rng);
 
 	/* Bye. */
 	return EXIT_SUCCESS;
