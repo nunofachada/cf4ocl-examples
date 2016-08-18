@@ -75,7 +75,7 @@ struct bufshare {
 	CCLQueue * cq;
 
 	/* Possible transfer error. */
-	CCLErr* err;
+	CCLErr * err;
 
 	/* Number of random numbers in buffer. */
 	cl_uint numrn;
@@ -147,14 +147,14 @@ void * rng_out(void * arg) {
  * */
 int main(int argc, char **argv) {
 
+	/* Aux. variable for loops. */
+	unsigned int i;
+
 	/* Host buffer. */
 	struct bufshare bufs = { NULL, NULL, NULL, NULL, NULL, 0, 0, 0 };
 
 	/* Communications thread. */
 	pthread_t comms_th;
-
-	/* Increment aux variable. */
-	unsigned int i;
 
 	/* cf4ocl wrappers. */
 	CCLContext * ctx = NULL;
@@ -276,7 +276,7 @@ int main(int argc, char **argv) {
 	fprintf(stderr, " * Number of iterations          : %u\n",
 		(unsigned int) bufs.numiter);
 
-	/* Initialize profiling. */
+	/* Start profiling. */
 	prof = ccl_prof_new();
 	ccl_prof_start(prof);
 

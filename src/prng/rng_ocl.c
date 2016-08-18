@@ -126,7 +126,8 @@ void * rng_out(void * arg) {
 		/* Signal that read for current iteration is over. */
 		cp_sem_post(&sem_comm);
 
-		/* If error occurs let main thread handle it. */
+		/* If error occured in read, terminate thread and let main thread
+		 * handle error. */
 		if (bufs->status != CL_SUCCESS) return NULL;
 
 		/* Write raw random numbers to stdout. */
@@ -418,7 +419,7 @@ int main(int argc, char **argv) {
 		kinit, 1, sizeof(cl_uint), (const void *) &bufs.numrn);
 	HANDLE_ERROR(status);
 
-	/* Invoke initialization kernel. */
+	/* Invoke kernel for initializing random numbers. */
 	status = clEnqueueNDRangeKernel(cq_main, kinit, 1, NULL,
 		(const size_t *) &gws1, (const size_t *) &lws1, 0, NULL, &evt_kinit);
 	HANDLE_ERROR(status);
@@ -454,7 +455,7 @@ int main(int argc, char **argv) {
 		/* Handle possible errors in comms thread. */
 		HANDLE_ERROR(bufs.status);
 
-		/* Run RNG kernel. */
+		/* Run random number generation kernel. */
 		status = clEnqueueNDRangeKernel(cq_main, krng, 1, NULL,
 			(const size_t *) &gws2, (const size_t *) &lws2, 0, NULL,
 			&bufs.evts[i * 2 + 1]);
