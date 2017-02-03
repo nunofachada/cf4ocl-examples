@@ -347,9 +347,9 @@ int main(int argc, char **argv) {
 	HANDLE_ERROR(err);
 
 	/* Show profiling info. */
-	fprintf(stderr, "%s",
-		ccl_prof_get_summary(prof,
-			CCL_PROF_AGG_SORT_TIME, CCL_PROF_OVERLAP_SORT_DURATION));
+	fprintf(stderr, "%s", ccl_prof_get_summary(prof,
+		CCL_PROF_AGG_SORT_TIME | CCL_PROF_SORT_DESC,
+		CCL_PROF_OVERLAP_SORT_DURATION | CCL_PROF_SORT_DESC));
 #else
 
 	/* Show elapsed time. */
