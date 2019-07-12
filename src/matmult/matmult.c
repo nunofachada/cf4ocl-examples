@@ -1,6 +1,6 @@
 /*
  * This file is part of cf4ocl-examples.
- * Copyright (C) 2016 Nuno Fachada
+ * Copyright (C) 2019 Nuno Fachada
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -279,10 +279,10 @@ int main(int argc, char *argv[]) {
 	dev = ccl_context_get_device(ctx, 0, &err);
 	if_err_goto(err, error_handler);
 
-	dev_name = ccl_device_get_info_array(dev, CL_DEVICE_NAME, char*, &err);
+	dev_name = ccl_device_get_info_array(dev, CL_DEVICE_NAME, char, &err);
 	if_err_goto(err, error_handler);
 
-	dev_vendor = ccl_device_get_info_array(dev, CL_DEVICE_VENDOR, char*, &err);
+	dev_vendor = ccl_device_get_info_array(dev, CL_DEVICE_VENDOR, char, &err);
 	if_err_goto(err, error_handler);
 
 	g_printf("\n   == Using device '%s' from '%s'\n", dev_name, dev_vendor);

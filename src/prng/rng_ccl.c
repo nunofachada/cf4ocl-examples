@@ -1,6 +1,6 @@
 /*
  * This file is part of cf4ocl-examples.
- * Copyright (C) 2016 Nuno Fachada
+ * Copyright (C) 2019 Nuno Fachada
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -214,7 +214,7 @@ int main(int argc, char **argv) {
 	HANDLE_ERROR(err);
 
 	/* Get device name. */
-	dev_name = ccl_device_get_info_array(dev, CL_DEVICE_NAME, char*, &err);
+	dev_name = ccl_device_get_info_array(dev, CL_DEVICE_NAME, char, &err);
 	HANDLE_ERROR(err);
 
 	/* Create command queues. */

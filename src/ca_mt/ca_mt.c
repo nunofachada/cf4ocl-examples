@@ -32,7 +32,7 @@
  * 2. RNG seed
  *
  * @author Nuno Fachada
- * @date 2016
+ * @date 2019
  * @copyright [GNU General Public License version 3 (GPLv3)](http://www.gnu.org/licenses/gpl.html)
  */
 
@@ -209,7 +209,7 @@ int main(int argc, char* argv[]) {
 
 	/* Global and local worksizes. */
 	size_t gws[2];
-	size_t lws[2];
+	size_t lws[2] = { 0, 0 };
 	/* Threads. */
 	GThread* comm_thread;
 	GThread* exec_thread;
@@ -444,5 +444,3 @@ int main(int argc, char* argv[]) {
 	return 0;
 
 }
-
-
